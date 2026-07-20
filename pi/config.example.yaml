@@ -1,0 +1,26 @@
+# Copy to config.yaml and fill in. config.yaml is gitignored (holds secrets).
+
+grocy:
+  base_url: "https://gr.example.com/api"   # your Grocy API base (ends in /api)
+  api_key: "YOUR_GROCY_API_KEY"            # Grocy > Settings > Manage API keys
+  consume_amount: 1
+  spoil_on_consume: false
+
+scanner:
+  # Find the stable path with:  ls -l /dev/input/by-id/
+  # Pick the one ending in -event-kbd for your scanner.
+  device_path: "/dev/input/by-id/usb-XXXX-event-kbd"
+
+mqtt:
+  host: "192.168.1.x"          # HA / broker LAN IP (NOT the public hostname)
+  port: 1883
+  username: "basil-capture"    # a dedicated local Home Assistant user
+  password: "CHANGE_ME"
+  client_id: "basil-capture-pi"
+  status_topic: "basil/capture/status"
+  availability_topic: "basil/capture/availability"
+
+behavior:
+  consume_timeout_sec: 5
+  scan_min_length: 4
+  result_display_sec: 1.5      # how long success/error stays on screen

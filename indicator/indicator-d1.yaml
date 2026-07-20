@@ -1,0 +1,206 @@
+# =============================================================================
+# Basil Capture - SenseCAP Indicator D1 Status Display (ESPHome)
+# =============================================================================
+# Subscribes to the MQTT topics published by the Basil Capture Pi service and
+# shows the current status on the 4" LVGL screen.
+#
+# Topics (must match pi/config.yaml -> mqtt):
+#   basil/capture/status        JSON: {status,title,body,ts}
+#   basil/capture/availability  "online" / "offline"  (LWT from the Pi)
+#
+# Status -> color:  success=green  error=red  scanning=blue  idle=grey
+#
+# First flash over USB-C (bottom port); afterwards OTA.
+# =============================================================================
+
+substitutions:
+  name: basil-capture-indicator
+  friendly_name: Basil Capture Indicator
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  name_add_mac_suffix: false
+  platformio_options:
+    board_build.flash_mode: dio
+
+# ESP32-S3 with octal PSRAM. The display will NOT initialize without PSRAM
+# configured correctly - this is the usual cause of a black/backlight-off screen.
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO
+  hardware_uart: UART0
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Setup"
+
+captive_portal:
+
+ota:
+  - platform: esphome
+
+# --- MQTT: subscribe to the Pi's status topics ------------------------------
+# No native HA "api:" block on purpose - the Indicator is driven purely by the
+# Pi's MQTT messages, keeping it decoupled from HA internals.
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  birth_message:
+    topic: basil/capture/indicator/availability
+    payload: online
+  will_message:
+    topic: basil/capture/indicator/availability
+    payload: offline
+
+  on_json_message:
+    - topic: basil/capture/status
+      then:
+        - text_sensor.template.publish:
+            id: scan_status
+            state: !lambda 'return x["status"];'
+        - text_sensor.template.publish:
+            id: scan_title
+            state: !lambda 'return x["title"];'
+        - text_sensor.template.publish:
+            id: scan_body
+            state: !lambda 'return x["body"];'
+
+  on_message:
+    - topic: basil/capture/availability
+      then:
+        - lambda: 'id(pi_online) = (x == "online");'
+        - script.execute: refresh_screen
+
+globals:
+  - id: pi_online
+    type: bool
+    restore_value: no
+    initial_value: "true"
+
+text_sensor:
+  - platform: template
+    id: scan_status
+    on_value:
+      - script.execute: refresh_screen
+  - platform: template
+    id: scan_title
+  - platform: template
+    id: scan_body
+
+# --- Display stack ----------------------------------------------------------
+i2c:
+  - id: bus_a
+    sda: GPIO39
+    scl: GPIO40
+    scan: false
+
+pca9554:
+  - id: pca9554a_device
+    address: 0x20
+    i2c_id: bus_a
+
+display:
+  - platform: mipi_rgb
+    model: SEEED-INDICATOR-D1
+    id: sensecap_display
+    update_interval: never
+    auto_clear_enabled: false
+
+light:
+  - platform: monochromatic
+    id: backlight
+    output: backlight_output
+    default_transition_length: 0s
+    restore_mode: ALWAYS_ON
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO45
+
+# --- LVGL UI ----------------------------------------------------------------
+lvgl:
+  displays:
+    - sensecap_display
+  pages:
+    - id: main_page
+      widgets:
+        - obj:
+            id: bg_panel
+            x: 0
+            y: 0
+            width: 480
+            height: 480
+            bg_color: 0x37474F
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            widgets:
+              - label:
+                  id: lbl_title
+                  text: "Basil Capture"
+                  align: CENTER
+                  y: -60
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_48
+              - label:
+                  id: lbl_body
+                  text: ""
+                  align: CENTER
+                  y: 20
+                  text_color: 0xECEFF1
+                  text_font: montserrat_28
+              - label:
+                  id: lbl_footer
+                  text: ""
+                  align: BOTTOM_MID
+                  y: -16
+                  text_color: 0xB0BEC5
+                  text_font: montserrat_20
+
+# --- Screen refresh logic ---------------------------------------------------
+script:
+  - id: refresh_screen
+    then:
+      - lambda: |-
+          if (!id(pi_online)) {
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(0x263238), 0);
+            lv_label_set_text(id(lbl_title), "Basil Capture");
+            lv_label_set_text(id(lbl_body), "offline");
+            lv_label_set_text(id(lbl_footer), "waiting for Pi...");
+            return;
+          }
+
+          std::string s = id(scan_status).state;
+          std::string title = id(scan_title).state;
+          std::string body  = id(scan_body).state;
+
+          uint32_t color = 0x37474F;   // idle grey
+          if      (s == "success")  color = 0x2E7D32;  // green
+          else if (s == "error")    color = 0xC62828;  // red
+          else if (s == "scanning") color = 0x1565C0;  // blue
+          else if (s == "idle")     color = 0x37474F;  // grey
+
+          lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
+          lv_label_set_text(id(lbl_title), title.c_str());
+          lv_label_set_text(id(lbl_body),  body.c_str());
+          lv_label_set_text(id(lbl_footer), s.c_str());

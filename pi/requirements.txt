@@ -1,0 +1,4 @@
+evdev>=1.6
+requests>=2.31
+paho-mqtt>=1.6,<2.0
+PyYAML>=6.0

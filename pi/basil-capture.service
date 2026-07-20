@@ -1,0 +1,15 @@
+[Unit]
+Description=Basil Capture - barcode consume service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/basil-capture/pi
+ExecStart=/home/pi/basil-capture/pi/venv/bin/python /home/pi/basil-capture/pi/main.py -c /home/pi/basil-capture/pi/config.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

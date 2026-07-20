@@ -1,0 +1,17 @@
+# Secrets / local config
+pi/config.yaml
+indicator/secrets.yaml
+secrets.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# ESPHome build artifacts
+.esphome/
+
+# OS
+.DS_Store
