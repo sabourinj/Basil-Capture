@@ -220,14 +220,15 @@ lvgl:
                         image_recolor: ${color_leaf}
                         image_recolor_opa: COVER
               # --- Scanner reticle: four corner brackets (Basil motif) ---
-              # Each corner = one horizontal + one vertical bar meeting at 90 deg.
-              # Grouped so we can show/hide the whole reticle at once.
+              # Frame ~340w x 200h centered in the body, with "Ready to Scan"
+              # sitting inside it. Bar length 60, thickness 8.
+              # Frame edges: left x=70, right corner x=410, top y=176, bottom y=376
               # Top-left
               - obj:
                   id: br_tl_h
-                  x: 90
-                  y: 186
-                  width: 70
+                  x: 60
+                  y: 159
+                  width: 64
                   height: 8
                   radius: 0
                   bg_color: ${color_bracket}
@@ -236,10 +237,10 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_tl_v
-                  x: 90
-                  y: 186
+                  x: 60
+                  y: 159
                   width: 8
-                  height: 70
+                  height: 64
                   radius: 0
                   bg_color: ${color_bracket}
                   bg_opa: COVER
@@ -248,9 +249,9 @@ lvgl:
               # Top-right
               - obj:
                   id: br_tr_h
-                  x: 320
-                  y: 186
-                  width: 70
+                  x: 356
+                  y: 159
+                  width: 64
                   height: 8
                   radius: 0
                   bg_color: ${color_bracket}
@@ -259,10 +260,10 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_tr_v
-                  x: 382
-                  y: 186
+                  x: 412
+                  y: 159
                   width: 8
-                  height: 70
+                  height: 64
                   radius: 0
                   bg_color: ${color_bracket}
                   bg_opa: COVER
@@ -271,9 +272,9 @@ lvgl:
               # Bottom-left
               - obj:
                   id: br_bl_h
-                  x: 90
-                  y: 358
-                  width: 70
+                  x: 60
+                  y: 361
+                  width: 64
                   height: 8
                   radius: 0
                   bg_color: ${color_bracket}
@@ -282,10 +283,10 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_bl_v
-                  x: 90
-                  y: 296
+                  x: 60
+                  y: 305
                   width: 8
-                  height: 70
+                  height: 64
                   radius: 0
                   bg_color: ${color_bracket}
                   bg_opa: COVER
@@ -294,9 +295,9 @@ lvgl:
               # Bottom-right
               - obj:
                   id: br_br_h
-                  x: 320
-                  y: 358
-                  width: 70
+                  x: 356
+                  y: 361
+                  width: 64
                   height: 8
                   radius: 0
                   bg_color: ${color_bracket}
@@ -305,28 +306,28 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_br_v
-                  x: 382
-                  y: 296
+                  x: 412
+                  y: 305
                   width: 8
-                  height: 70
+                  height: 64
                   radius: 0
                   bg_color: ${color_bracket}
                   bg_opa: COVER
                   border_width: 0
                   pad_all: 0
-              # --- Text ---
+              # --- Text (centered inside the bracket frame) ---
               - label:
                   id: lbl_title
                   text: "Ready to Scan"
                   align: CENTER
-                  y: 26
+                  y: 24
                   text_color: ${color_text}
-                  text_font: montserrat_48
+                  text_font: montserrat_28
               - label:
                   id: lbl_body
                   text: ""
                   align: CENTER
-                  y: 81
+                  y: 60
                   text_color: ${color_text}
                   text_font: montserrat_28
               - label:
@@ -388,4 +389,4 @@ script:
           set_brackets(false);
           lv_label_set_text(id(lbl_title), title.c_str());
           lv_label_set_text(id(lbl_body),  body.c_str());
-          lv_label_set_text(id(lbl_footer), s.c_str());
+          lv_label_set_text(id(lbl_footer), "");
