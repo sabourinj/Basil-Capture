@@ -16,6 +16,16 @@
 substitutions:
   name: basil-capture-indicator
   friendly_name: Basil Capture Indicator
+  # --- Basil brand palette (matched to the app) ---
+  color_bg: "0x5A3A4E"        # deep purple body
+  color_bg_dark: "0x3A2130"   # darker header/offline purple
+  color_success: "0x6FB06B"   # Basil mint-forward green (readable on dark)
+  color_error: "0xC0392B"     # error red
+  color_scanning: "0x8E6C88"  # muted purple-lavender for "looking up"
+  color_bracket: "0xC9B8C4"   # scanner reticle lavender-grey
+  color_leaf: "0x8CC63F"      # basil leaf green (header icon)
+  color_text: "0xFFFFFF"      # primary white text
+  color_text_dim: "0xC9B8C4"  # secondary lavender-grey text
 
 esphome:
   name: ${name}
@@ -55,6 +65,15 @@ wifi:
     ssid: "${friendly_name} Setup"
 
 captive_portal:
+
+# Basil leaf icon from Material Design Icons, baked in at compile time.
+# (Uses the built-in MDI set - no file upload needed. Swap for the real
+#  basil_logo.png later via a local file if desired.)
+image:
+  - file: mdi:leaf
+    id: basil_leaf
+    resize: 44x44
+    type: BINARY
 
 ota:
   - platform: esphome
@@ -168,31 +187,154 @@ lvgl:
             width: 480
             height: 480
             radius: 0
-            bg_color: 0x37474F
+            bg_color: ${color_bg}
             bg_opa: COVER
             border_width: 0
             pad_all: 0
             widgets:
+              # --- Header banner (darker purple, Basil + leaf) ---
+              - obj:
+                  id: header_bar
+                  x: 0
+                  y: 0
+                  width: 480
+                  height: 72
+                  radius: 0
+                  bg_color: ${color_bg_dark}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+                  widgets:
+                    - label:
+                        id: lbl_brand
+                        text: "Basil"
+                        x: 24
+                        align: LEFT_MID
+                        text_color: ${color_text}
+                        text_font: montserrat_28
+                    - image:
+                        id: img_leaf
+                        src: basil_leaf
+                        x: 128
+                        align: LEFT_MID
+                        image_recolor: ${color_leaf}
+                        image_recolor_opa: COVER
+              # --- Scanner reticle: four corner brackets (Basil motif) ---
+              # Each corner = one horizontal + one vertical bar meeting at 90 deg.
+              # Grouped so we can show/hide the whole reticle at once.
+              # Top-left
+              - obj:
+                  id: br_tl_h
+                  x: 90
+                  y: 186
+                  width: 70
+                  height: 8
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              - obj:
+                  id: br_tl_v
+                  x: 90
+                  y: 186
+                  width: 8
+                  height: 70
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              # Top-right
+              - obj:
+                  id: br_tr_h
+                  x: 320
+                  y: 186
+                  width: 70
+                  height: 8
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              - obj:
+                  id: br_tr_v
+                  x: 382
+                  y: 186
+                  width: 8
+                  height: 70
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              # Bottom-left
+              - obj:
+                  id: br_bl_h
+                  x: 90
+                  y: 358
+                  width: 70
+                  height: 8
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              - obj:
+                  id: br_bl_v
+                  x: 90
+                  y: 296
+                  width: 8
+                  height: 70
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              # Bottom-right
+              - obj:
+                  id: br_br_h
+                  x: 320
+                  y: 358
+                  width: 70
+                  height: 8
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              - obj:
+                  id: br_br_v
+                  x: 382
+                  y: 296
+                  width: 8
+                  height: 70
+                  radius: 0
+                  bg_color: ${color_bracket}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              # --- Text ---
               - label:
                   id: lbl_title
-                  text: "Basil Capture"
+                  text: "Ready to Scan"
                   align: CENTER
-                  y: -60
-                  text_color: 0xFFFFFF
+                  y: 26
+                  text_color: ${color_text}
                   text_font: montserrat_48
               - label:
                   id: lbl_body
                   text: ""
                   align: CENTER
-                  y: 20
-                  text_color: 0xECEFF1
+                  y: 81
+                  text_color: ${color_text}
                   text_font: montserrat_28
               - label:
                   id: lbl_footer
                   text: ""
                   align: BOTTOM_MID
                   y: -16
-                  text_color: 0xB0BEC5
+                  text_color: ${color_text_dim}
                   text_font: montserrat_20
 
 # --- Screen refresh logic ---------------------------------------------------
@@ -200,11 +342,25 @@ script:
   - id: refresh_screen
     then:
       - lambda: |-
+          // Helper: show or hide all eight bracket bars (the scanner reticle).
+          auto set_brackets = [](bool visible) {
+            lv_obj_t* bars[] = {
+              id(br_tl_h), id(br_tl_v), id(br_tr_h), id(br_tr_v),
+              id(br_bl_h), id(br_bl_v), id(br_br_h), id(br_br_v)
+            };
+            for (auto* b : bars) {
+              if (visible) lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
+              else         lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+            }
+          };
+
+          // Pi offline overrides everything.
           if (!id(pi_online)) {
-            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(0x263238), 0);
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
+            set_brackets(false);
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
-            lv_label_set_text(id(lbl_footer), "waiting for Pi...");
+            lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             return;
           }
 
@@ -212,13 +368,24 @@ script:
           std::string title = id(scan_title).state;
           std::string body  = id(scan_body).state;
 
-          uint32_t color = 0x37474F;   // idle grey
-          if      (s == "success")  color = 0x2E7D32;  // green
-          else if (s == "error")    color = 0xC62828;  // red
-          else if (s == "scanning") color = 0x1565C0;  // blue
-          else if (s == "idle")     color = 0x37474F;  // grey
+          // Idle = the Basil "Ready to Scan" screen with reticle brackets.
+          if (s == "idle" || s.empty()) {
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
+            set_brackets(true);
+            lv_label_set_text(id(lbl_title), "Ready to Scan");
+            lv_label_set_text(id(lbl_body), "");
+            lv_label_set_text(id(lbl_footer), "");
+            return;
+          }
+
+          // Active states: hide brackets, fill with the state color, show text.
+          uint32_t color = ${color_bg};
+          if      (s == "success")  color = ${color_success};
+          else if (s == "error")    color = ${color_error};
+          else if (s == "scanning") color = ${color_scanning};
 
           lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
+          set_brackets(false);
           lv_label_set_text(id(lbl_title), title.c_str());
           lv_label_set_text(id(lbl_body),  body.c_str());
           lv_label_set_text(id(lbl_footer), s.c_str());
