@@ -49,7 +49,6 @@ def main():
     try:
         for barcode in reader.scans():
             print(f"Scanned: {barcode}")
-            display.show_scanning(barcode)
             try:
                 product, consumed = grocy.consume_by_barcode(
                     barcode,
