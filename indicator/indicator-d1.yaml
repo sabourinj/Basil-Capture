@@ -30,9 +30,11 @@ esphome:
 esp32:
   board: esp32-s3-devkitc-1
   variant: esp32s3
+  flash_size: 8MB
   framework:
     type: esp-idf
     sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_8MB: "y"
       CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
@@ -113,9 +115,18 @@ i2c:
     scl: GPIO40
     scan: false
 
+# SPI bus used to send the display's init sequence at boot. Required by the
+# mipi_rgb driver even though pixel data runs over the parallel RGB bus.
+spi:
+  - id: lcd_spi
+    clk_pin: GPIO41
+    mosi_pin: GPIO48
+    miso_pin: GPIO47
+
 pca9554:
   - id: pca9554a_device
     address: 0x20
+    pin_count: 16
     i2c_id: bus_a
 
 display:
@@ -135,7 +146,10 @@ light:
 output:
   - platform: ledc
     id: backlight_output
-    pin: GPIO45
+    pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    frequency: 100Hz
 
 # --- LVGL UI ----------------------------------------------------------------
 lvgl:
