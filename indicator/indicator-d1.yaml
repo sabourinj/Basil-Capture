@@ -23,7 +23,6 @@ substitutions:
   color_error: "0xC0392B"     # error red
   color_scanning: "0x8E6C88"  # muted purple-lavender for "looking up"
   color_bracket: "0xC9B8C4"   # scanner reticle lavender-grey
-  color_leaf: "0x8CC63F"      # basil leaf green (header icon)
   color_text: "0xFFFFFF"      # primary white text
   color_text_dim: "0xC9B8C4"  # secondary lavender-grey text
 
@@ -66,14 +65,15 @@ wifi:
 
 captive_portal:
 
-# Basil leaf icon from Material Design Icons, baked in at compile time.
-# (Uses the built-in MDI set - no file upload needed. Swap for the real
-#  basil_logo.png later via a local file if desired.)
+# Basil sprig logo (full-color, source is 804x615). RGB565 + alpha_channel
+# keeps the PNG's anti-aliased transparency instead of flattening to one
+# color, so no image_recolor is applied when it's drawn.
 image:
-  - file: mdi:leaf
+  - file: basil_logo.png
     id: basil_leaf
-    resize: 44x44
-    type: BINARY
+    resize: 63x48
+    type: RGB565
+    transparency: alpha_channel
 
 ota:
   - platform: esphome
@@ -217,8 +217,6 @@ lvgl:
                         src: basil_leaf
                         x: 128
                         align: LEFT_MID
-                        image_recolor: ${color_leaf}
-                        image_recolor_opa: COVER
               # --- Scanner reticle: four corner brackets (Basil motif) ---
               # Frame ~340w x 200h centered in the body, with "Ready to Scan"
               # sitting inside it. Bar length 60, thickness 8.
@@ -321,6 +319,9 @@ lvgl:
                   text: "Ready to Scan"
                   align: CENTER
                   y: 24
+                  width: 440
+                  long_mode: WRAP
+                  text_align: CENTER
                   text_color: ${color_text}
                   text_font: montserrat_28
               - label:
@@ -328,6 +329,9 @@ lvgl:
                   text: ""
                   align: CENTER
                   y: 60
+                  width: 440
+                  long_mode: WRAP
+                  text_align: CENTER
                   text_color: ${color_text}
                   text_font: montserrat_28
               - label:
@@ -335,6 +339,9 @@ lvgl:
                   text: ""
                   align: BOTTOM_MID
                   y: -16
+                  width: 440
+                  long_mode: WRAP
+                  text_align: CENTER
                   text_color: ${color_text_dim}
                   text_font: montserrat_20
 

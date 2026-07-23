@@ -56,7 +56,8 @@ class Display:
         self._publish(Status.SCANNING, "Looking up", barcode)
 
     def show_success(self, product, amount):
-        self._publish(Status.SUCCESS, "Consumed", f"{product}  -{amount}")
+        amount = int(amount) if amount == int(amount) else amount
+        self._publish(Status.SUCCESS, "Consumed", f"{product}\nx {amount}")
 
     def show_error(self, message):
         self._publish(Status.ERROR, "Error", message)
