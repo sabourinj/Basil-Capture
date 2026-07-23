@@ -71,7 +71,7 @@ captive_portal:
 image:
   - file: basil_logo.png
     id: basil_leaf
-    resize: 63x48
+    resize: 30x23
     type: RGB565
     transparency: alpha_channel
 
@@ -215,8 +215,11 @@ lvgl:
                     - image:
                         id: img_leaf
                         src: basil_leaf
-                        x: 128
-                        align: LEFT_MID
+                        align_to:
+                          id: lbl_brand
+                          align: OUT_RIGHT_MID
+                          x: 4
+                          y: -2
               # --- Scanner reticle: four corner brackets (Basil motif) ---
               # Frame ~340w x 200h centered in the body, with "Ready to Scan"
               # sitting inside it. Bar length 60, thickness 8.
@@ -314,26 +317,41 @@ lvgl:
                   border_width: 0
                   pad_all: 0
               # --- Text (centered inside the bracket frame) ---
-              - label:
-                  id: lbl_title
-                  text: "Ready to Scan"
+              # Title + body sit in a flex column instead of fixed y offsets, so
+              # the title is always pushed down by however tall the body's
+              # wrapped text actually is - no more overlap on long product names.
+              - obj:
+                  id: status_group
                   align: CENTER
                   y: 24
                   width: 440
-                  long_mode: WRAP
-                  text_align: CENTER
-                  text_color: ${color_text}
-                  text_font: montserrat_28
-              - label:
-                  id: lbl_body
-                  text: ""
-                  align: CENTER
-                  y: 60
-                  width: 440
-                  long_mode: WRAP
-                  text_align: CENTER
-                  text_color: ${color_text}
-                  text_font: montserrat_28
+                  height: SIZE_CONTENT
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  layout:
+                    type: flex
+                    flex_flow: column
+                    flex_align_main: center
+                    flex_align_cross: center
+                    pad_row: 8
+                  widgets:
+                    - label:
+                        id: lbl_title
+                        text: "Ready to Scan"
+                        width: 440
+                        long_mode: WRAP
+                        text_align: CENTER
+                        text_color: ${color_text}
+                        text_font: montserrat_28
+                    - label:
+                        id: lbl_body
+                        text: ""
+                        width: 440
+                        long_mode: WRAP
+                        text_align: CENTER
+                        text_color: ${color_text}
+                        text_font: montserrat_28
               - label:
                   id: lbl_footer
                   text: ""
@@ -368,6 +386,7 @@ script:
             set_brackets(false);
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
+            lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             return;
           }
@@ -377,11 +396,15 @@ script:
           std::string body  = id(scan_body).state;
 
           // Idle = the Basil "Ready to Scan" screen with reticle brackets.
+          // lbl_body is hidden rather than just emptied, so the flex column
+          // collapses down to the title alone and stays centered in the
+          // bracket frame instead of leaving room for an invisible 2nd line.
           if (s == "idle" || s.empty()) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
             set_brackets(true);
             lv_label_set_text(id(lbl_title), "Ready to Scan");
             lv_label_set_text(id(lbl_body), "");
+            lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "");
             return;
           }
@@ -396,4 +419,5 @@ script:
           set_brackets(false);
           lv_label_set_text(id(lbl_title), title.c_str());
           lv_label_set_text(id(lbl_body),  body.c_str());
+          lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
           lv_label_set_text(id(lbl_footer), "");

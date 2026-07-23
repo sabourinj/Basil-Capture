@@ -22,7 +22,7 @@ AVAIL_TOPIC = "basil/capture/availability"
 FRAMES = {
     "idle":     ("Ready", "Scan an item"),
     "scanning": ("Looking up", "0123456789012"),
-    "success":  ("Consumed", "Whole Milk\nx 1"),
+    "success":  ("Consumed", "Whole Milk\nx 2"),
     "error":    ("Error", "Out of stock"),
 }
 

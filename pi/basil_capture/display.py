@@ -57,7 +57,8 @@ class Display:
 
     def show_success(self, product, amount):
         amount = int(amount) if amount == int(amount) else amount
-        self._publish(Status.SUCCESS, "Consumed", f"{product}\nx {amount}")
+        body = product if amount == 1 else f"{product}\nx {amount}"
+        self._publish(Status.SUCCESS, "Consumed", body)
 
     def show_error(self, message):
         self._publish(Status.ERROR, "Error", message)
