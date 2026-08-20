@@ -33,6 +33,17 @@ esphome:
   name_add_mac_suffix: false
   platformio_options:
     board_build.flash_mode: dio
+  # Run the same refresh logic at boot so the initial "Ready to Scan" screen is
+  # pixel-identical to the idle screen shown after MQTT messages arrive. Without
+  # this, the boot render uses the static LVGL layout (labels not yet re-aligned),
+  # which is what caused the title to sit slightly higher until the first message.
+  # priority -100 runs late, after the display + LVGL are initialized; the short
+  # delay lets the first LVGL layout pass settle before we re-align.
+  on_boot:
+    priority: -100
+    then:
+      - delay: 500ms
+      - script.execute: refresh_screen
 
 # ESP32-S3 with octal PSRAM. The display will NOT initialize without PSRAM
 # configured correctly - this is the usual cause of a black/backlight-off screen.
@@ -362,6 +373,17 @@ script:
             }
           };
 
+          // Helper: re-assert label alignment after every text change. LVGL sets
+          // a label's position once at creation; lv_label_set_text() alone does
+          // NOT re-center it, so wrapped/multi-line text (or a stale boot layout)
+          // drifts from where it should sit. Re-aligning here keeps the title,
+          // body, and footer anchored regardless of line count or render timing.
+          auto realign_labels = []() {
+            lv_obj_align(id(lbl_title),  LV_ALIGN_CENTER,     0,  24);
+            lv_obj_align(id(lbl_body),   LV_ALIGN_CENTER,     0,  60);
+            lv_obj_align(id(lbl_footer), LV_ALIGN_BOTTOM_MID, 0, -16);
+          };
+
           // Pi offline overrides everything.
           if (!id(pi_online)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
@@ -369,6 +391,7 @@ script:
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
+            realign_labels();
             return;
           }
 
@@ -383,6 +406,7 @@ script:
             lv_label_set_text(id(lbl_title), "Ready to Scan");
             lv_label_set_text(id(lbl_body), "");
             lv_label_set_text(id(lbl_footer), "");
+            realign_labels();
             return;
           }
 
@@ -397,3 +421,4 @@ script:
           lv_label_set_text(id(lbl_title), title.c_str());
           lv_label_set_text(id(lbl_body),  body.c_str());
           lv_label_set_text(id(lbl_footer), "");
+          realign_labels();
