@@ -325,26 +325,48 @@ lvgl:
                   border_width: 0
                   pad_all: 0
               # --- Text (centered inside the bracket frame) ---
-              - label:
-                  id: lbl_title
-                  text: "Ready to Scan"
+              # Title + body live in a SIZE_CONTENT flex column, NOT at fixed y
+              # offsets. Fixed offsets anchored each label's *center*, so a body
+              # that wrapped to two lines grew upward into the title and drew on
+              # top of it. Flex stacks them instead: the body can be any number
+              # of lines and simply pushes the column taller.
+              #
+              # Only the container is re-aligned in refresh_screen - never these
+              # two labels. lv_obj_align() on a flex child is overridden by the
+              # layout engine, which is what made the previous realign approach
+              # incompatible with flex.
+              - obj:
+                  id: status_group
                   align: CENTER
                   y: 24
                   width: 440
-                  long_mode: WRAP
-                  text_align: CENTER
-                  text_color: ${color_text}
-                  text_font: montserrat_28
-              - label:
-                  id: lbl_body
-                  text: ""
-                  align: CENTER
-                  y: 60
-                  width: 440
-                  long_mode: WRAP
-                  text_align: CENTER
-                  text_color: ${color_text}
-                  text_font: montserrat_28
+                  height: SIZE_CONTENT
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  layout:
+                    type: flex
+                    flex_flow: column
+                    flex_align_main: center
+                    flex_align_cross: center
+                    pad_row: 8
+                  widgets:
+                    - label:
+                        id: lbl_title
+                        text: "Ready to Scan"
+                        width: 440
+                        long_mode: WRAP
+                        text_align: CENTER
+                        text_color: ${color_text}
+                        text_font: montserrat_28
+                    - label:
+                        id: lbl_body
+                        text: ""
+                        width: 440
+                        long_mode: WRAP
+                        text_align: CENTER
+                        text_color: ${color_text}
+                        text_font: montserrat_28
               - label:
                   id: lbl_footer
                   text: ""
@@ -373,15 +395,22 @@ script:
             }
           };
 
-          // Helper: re-assert label alignment after every text change. LVGL sets
-          // a label's position once at creation; lv_label_set_text() alone does
-          // NOT re-center it, so wrapped/multi-line text (or a stale boot layout)
-          // drifts from where it should sit. Re-aligning here keeps the title,
-          // body, and footer anchored regardless of line count or render timing.
+          // Helper: re-assert alignment after every text change. LVGL positions
+          // an object once at creation; lv_label_set_text() alone does not
+          // re-center it, so a stale boot layout drifts from where it belongs.
+          //
+          // Only status_group and the footer are aligned here. lbl_title and
+          // lbl_body are flex children - the layout engine owns their position
+          // and would discard any lv_obj_align() on them. Forcing them into
+          // fixed center-anchored offsets is what let a two-line body grow
+          // upward and cover the title.
+          //
+          // The group is SIZE_CONTENT, so re-aligning it after the text changes
+          // re-centers whatever height the new content produced.
           auto realign_labels = []() {
-            lv_obj_align(id(lbl_title),  LV_ALIGN_CENTER,     0,  24);
-            lv_obj_align(id(lbl_body),   LV_ALIGN_CENTER,     0,  60);
-            lv_obj_align(id(lbl_footer), LV_ALIGN_BOTTOM_MID, 0, -16);
+            lv_obj_update_layout(id(status_group));
+            lv_obj_align(id(status_group), LV_ALIGN_CENTER,     0,  24);
+            lv_obj_align(id(lbl_footer),   LV_ALIGN_BOTTOM_MID, 0, -16);
           };
 
           // Pi offline overrides everything.
@@ -390,6 +419,7 @@ script:
             set_brackets(false);
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
+            lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             realign_labels();
             return;
@@ -404,7 +434,10 @@ script:
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
             set_brackets(true);
             lv_label_set_text(id(lbl_title), "Ready to Scan");
+            // Hidden, not just emptied: an empty label is still a full line tall
+            // in the flex column, which would push the title off-center.
             lv_label_set_text(id(lbl_body), "");
+            lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "");
             realign_labels();
             return;
@@ -420,5 +453,6 @@ script:
           set_brackets(false);
           lv_label_set_text(id(lbl_title), title.c_str());
           lv_label_set_text(id(lbl_body),  body.c_str());
+          lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
           lv_label_set_text(id(lbl_footer), "");
           realign_labels();
