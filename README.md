@@ -58,11 +58,14 @@ tools/
 
 | Topic | Payload | Notes |
 |-------|---------|-------|
-| `basil/capture/status` | `{"status","title","body","ts"}` | retained |
+| `basil/capture/status` | `{"status","title","body","detail","ts"}` | retained |
 | `basil/capture/availability` | `online` / `offline` | Pi LWT, retained |
 | `basil/capture/indicator/availability` | `online` / `offline` | Indicator LWT |
 
-`status` is one of `idle`, `scanning`, `success`, `error`.
+`status` is one of `idle`, `scanning`, `success`, `error`. `detail` is the
+secondary row under the product name — `"3 remaining"` / `"Last available"` on a
+successful consume, and `""` (row hidden) everywhere else, including when the
+Grocy stock lookup fails.
 
 ## Prerequisites
 

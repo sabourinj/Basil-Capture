@@ -19,21 +19,26 @@ import paho.mqtt.client as mqtt
 STATUS_TOPIC = "basil/capture/status"
 AVAIL_TOPIC = "basil/capture/availability"
 
+# frame name -> (status, title, body, detail)
+# The frame name is not always the status: "last" is a second success frame,
+# there to exercise the "Last available" stock row.
 FRAMES = {
-    "idle":     ("Ready", "Scan an item"),
-    "scanning": ("Looking up", "0123456789012"),
-    "success":  ("Consumed", "Whole Milk\nx 2"),
-    "error":    ("Error", "Out of stock"),
+    "idle":     ("idle",     "Ready",      "Scan an item",    ""),
+    "scanning": ("scanning", "Looking up", "0123456789012",   ""),
+    "success":  ("success",  "Consumed",   "Whole Milk\nx 2", "3 remaining"),
+    "last":     ("success",  "Consumed",   "Whole Milk",      "Last available"),
+    "error":    ("error",    "Error",      "Out of stock",    ""),
 }
 
 
-def publish(client, status):
-    title, body = FRAMES[status]
+def publish(client, frame):
+    status, title, body, detail = FRAMES[frame]
     payload = json.dumps({
-        "status": status, "title": title, "body": body, "ts": int(time.time()),
+        "status": status, "title": title, "body": body, "detail": detail,
+        "ts": int(time.time()),
     })
     client.publish(STATUS_TOPIC, payload, qos=1, retain=True)
-    print(f"-> {status}: {title} / {body}")
+    print(f"-> {frame}: {title} / {body} / {detail}")
 
 
 def main():
@@ -60,8 +65,8 @@ def main():
         else:
             print("Cycling statuses. Ctrl-C to stop.")
             while True:
-                for status in ("idle", "scanning", "success", "error"):
-                    publish(client, status)
+                for frame in ("idle", "scanning", "success", "last", "error"):
+                    publish(client, frame)
                     time.sleep(args.delay)
     except KeyboardInterrupt:
         pass
