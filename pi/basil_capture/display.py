@@ -22,9 +22,14 @@ class Status(Enum):
 
 
 class Display:
-    def __init__(self, cfg):
+    def __init__(self, cfg, result_display_sec=5.0):
         self.topic = cfg["status_topic"]
         self.avail = cfg["availability_topic"]
+        # How long main.py will leave a result on screen before publishing idle.
+        # Sent with every result so the Indicator's countdown bar drains over
+        # exactly that span - the Pi's config stays the single source of truth
+        # and changing it needs no reflash.
+        self.result_ms = int(result_display_sec * 1000)
 
         self.client = mqtt.Client(
             client_id=cfg.get("client_id", "basil-capture-pi"),
@@ -53,16 +58,20 @@ class Display:
         if rc == 0:
             client.publish(self.avail, "online", qos=1, retain=True)
 
-    def _publish(self, status, title, body, badge=""):
-        # "badge" is always present, even when empty. The Indicator reads it
-        # with a defaulting accessor anyway, but emitting it unconditionally
-        # keeps retained messages from older builds from being the only shape
-        # the firmware ever has to cope with.
+    def _publish(self, status, title, body, badge="", timeout_ms=0):
+        # "badge" and "timeout_ms" are always present, even when empty/zero. The
+        # Indicator reads them with defaulting accessors anyway, but emitting
+        # them unconditionally keeps retained messages from older builds from
+        # being the only shape the firmware ever has to cope with.
+        #
+        # timeout_ms is 0 on screens that don't time out (idle, scanning), which
+        # is what hides the countdown bar rather than a separate flag.
         payload = json.dumps({
             "status": status.value,
             "title": title,
             "body": body,
             "badge": badge,
+            "timeout_ms": timeout_ms,
             "ts": int(time.time()),
         })
         self.client.publish(self.topic, payload, qos=1, retain=True)
@@ -80,7 +89,8 @@ class Display:
         amount = int(amount) if amount == int(amount) else amount
         body = product if amount == 1 else f"{product}\nx {amount}"
         self._publish(Status.SUCCESS, "Consumed", body,
-                      badge=self._stock_badge(remaining))
+                      badge=self._stock_badge(remaining),
+                      timeout_ms=self.result_ms)
 
     @staticmethod
     def _stock_badge(remaining):
@@ -101,7 +111,7 @@ class Display:
         return f"{remaining} remaining"
 
     def show_error(self, message):
-        self._publish(Status.ERROR, "Error", message)
+        self._publish(Status.ERROR, "Error", message, timeout_ms=self.result_ms)
 
     def close(self):
         try:

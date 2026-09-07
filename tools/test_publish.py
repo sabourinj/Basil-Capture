@@ -19,23 +19,23 @@ import paho.mqtt.client as mqtt
 STATUS_TOPIC = "basil/capture/status"
 AVAIL_TOPIC = "basil/capture/availability"
 
-# frame name -> (status, title, body, badge)
+# frame name -> (status, title, body, badge, timeout_ms)
 # The frame name is not always the status: "last" is a second success frame,
 # there to exercise the pill's widest content ("Last available" vs a numeral).
 FRAMES = {
-    "idle":     ("idle",     "Ready",                  "Scan an item",    ""),
-    "scanning": ("scanning", "Identifying product...", "",                ""),
-    "success":  ("success",  "Consumed",               "Whole Milk\nx 2", "3 remaining"),
-    "last":     ("success",  "Consumed",               "Whole Milk",      "Last available"),
-    "error":    ("error",    "Error",                  "Out of stock",    ""),
+    "idle":     ("idle",     "Ready",                  "Scan an item",    "",               0),
+    "scanning": ("scanning", "Identifying product...", "",                "",               0),
+    "success":  ("success",  "Consumed",               "Whole Milk\nx 2", "3 remaining",    5000),
+    "last":     ("success",  "Consumed",               "Whole Milk",      "Last available", 5000),
+    "error":    ("error",    "Error",                  "Out of stock",    "",               5000),
 }
 
 
 def publish(client, frame):
-    status, title, body, badge = FRAMES[frame]
+    status, title, body, badge, timeout_ms = FRAMES[frame]
     payload = json.dumps({
         "status": status, "title": title, "body": body,
-        "badge": badge, "ts": int(time.time()),
+        "badge": badge, "timeout_ms": timeout_ms, "ts": int(time.time()),
     })
     client.publish(STATUS_TOPIC, payload, qos=1, retain=True)
     print(f"-> {frame}: {title} / {body} / [{badge}]")

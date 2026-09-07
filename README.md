@@ -58,7 +58,7 @@ tools/
 
 | Topic | Payload | Notes |
 |-------|---------|-------|
-| `basil/capture/status` | `{"status","title","body","badge","ts"}` | retained |
+| `basil/capture/status` | `{"status","title","body","badge","timeout_ms","ts"}` | retained |
 | `basil/capture/availability` | `online` / `offline` | Pi LWT, retained |
 | `basil/capture/indicator/availability` | `online` / `offline` | Indicator LWT |
 
@@ -69,6 +69,14 @@ tools/
 sizes to its content, so both fit the same widget. It is `""` elsewhere, which
 hides it — including when the Grocy stock lookup fails, so a count is never
 invented.
+
+`timeout_ms` is how long the Pi will leave that screen up, taken straight from
+`result_display_sec`. The Indicator drains a countdown bar over exactly that
+span, so the duration lives in the Pi's config alone and changing it needs no
+reflash. It is `0` on screens that don't time out, which hides the bar.
+
+The result screen is interruptible: scanning during the countdown cuts it short
+and processes the new item immediately, rather than queueing behind it.
 
 ## Prerequisites
 

@@ -124,6 +124,9 @@ mqtt:
         - text_sensor.template.publish:
             id: scan_badge
             state: !lambda 'return std::string(x["badge"] | "");'
+        # How long the Pi will leave this screen up. 0 on screens that don't
+        # time out, which is what hides the countdown bar.
+        - lambda: 'id(result_ms) = x["timeout_ms"] | 0;'
         - script.execute: refresh_screen
 
   on_message:
@@ -137,6 +140,10 @@ globals:
     type: bool
     restore_value: no
     initial_value: "true"
+  - id: result_ms
+    type: int
+    restore_value: no
+    initial_value: "0"
 
 text_sensor:
   - platform: template
@@ -416,6 +423,25 @@ lvgl:
                               # at montserrat_28 the pill matched the name's
                               # weight and competed with it for attention.
                               text_font: montserrat_20
+              # Countdown bar: drains right-to-left over exactly the span the
+              # Pi says it will leave this screen up. Anchored BOTTOM_LEFT so
+              # shrinking the width pulls the right edge in from a fixed left
+              # edge; a centered anchor would close in from both sides.
+              #
+              # Deliberately NOT a child of status_group - anything in that flex
+              # column reflows the text every animation frame.
+              - obj:
+                  id: countdown_bar
+                  align: BOTTOM_LEFT
+                  x: 0
+                  y: 0
+                  width: 480
+                  height: 6
+                  radius: 0
+                  bg_color: ${color_text}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
               - label:
                   id: lbl_footer
                   text: ""
@@ -456,6 +482,31 @@ script:
           //
           // The group is SIZE_CONTENT, so re-aligning it after the text changes
           // re-centers whatever height the new content produced.
+          // Helper: stop any running countdown and hide the bar. Killing the
+          // animation matters - without it a stale anim keeps writing widths
+          // to a hidden object and resumes mid-drain on the next screen.
+          auto stop_countdown = []() {
+            lv_anim_del(id(countdown_bar), nullptr);
+            lv_obj_add_flag(id(countdown_bar), LV_OBJ_FLAG_HIDDEN);
+          };
+
+          // Helper: restart the bar full-width and drain it over `ms`.
+          auto start_countdown = [](uint32_t ms) {
+            lv_anim_del(id(countdown_bar), nullptr);
+            lv_obj_set_width(id(countdown_bar), 480);
+            lv_obj_clear_flag(id(countdown_bar), LV_OBJ_FLAG_HIDDEN);
+
+            lv_anim_t a;
+            lv_anim_init(&a);
+            lv_anim_set_var(&a, id(countdown_bar));
+            lv_anim_set_exec_cb(&a, [](void* obj, int32_t v) {
+              lv_obj_set_width((lv_obj_t*) obj, v);
+            });
+            lv_anim_set_values(&a, 480, 0);
+            lv_anim_set_time(&a, ms);
+            lv_anim_start(&a);
+          };
+
           auto realign_labels = []() {
             lv_obj_update_layout(id(status_group));
             lv_obj_align(id(status_group), LV_ALIGN_CENTER,     0,  24);
@@ -471,6 +522,7 @@ script:
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
+            stop_countdown();
             realign_labels();
             return;
           }
@@ -492,6 +544,7 @@ script:
             lv_label_set_text(id(lbl_badge), "");
             lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "");
+            stop_countdown();
             realign_labels();
             return;
           }
@@ -519,4 +572,11 @@ script:
           else               lv_obj_clear_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
 
           lv_label_set_text(id(lbl_footer), "");
+
+          // Only result screens time out; "scanning" sends 0 and gets no bar.
+          // A new scan mid-countdown republishes and restarts this from full,
+          // which is correct - the Pi's timer restarts with it.
+          if (id(result_ms) > 0) start_countdown((uint32_t) id(result_ms));
+          else                   stop_countdown();
+
           realign_labels();

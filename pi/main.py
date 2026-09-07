@@ -7,7 +7,6 @@ subscribes to and displays.
 """
 import argparse
 import sys
-import time
 
 import yaml
 
@@ -30,7 +29,7 @@ def main():
     cfg = load_config(args.config)
     g, s, b = cfg["grocy"], cfg["scanner"], cfg["behavior"]
 
-    display = Display(cfg["mqtt"])
+    display = Display(cfg["mqtt"], b.get("result_display_sec", 5.0))
     grocy = GrocyClient(g["base_url"], g["api_key"], timeout=b["consume_timeout_sec"])
 
     try:
@@ -46,13 +45,26 @@ def main():
     display.show_idle()
     print("Scanner service started. Waiting for scans...")
 
+    result_sec = b.get("result_display_sec", 5.0)
+
     try:
-        for barcode in reader.scans():
+        # The result screen is a WAIT, not a sleep. Scanning during it cuts the
+        # screen short and processes the new item immediately.
+        #
+        # This is not just a nicety. A blocking sleep leaves the scanner's fd
+        # unread, and the kernel keeps buffering keystrokes - so scans made
+        # during the window were never actually ignored, they replayed
+        # afterwards as a backlog, each with its own full-length result screen.
+        # Longer result_display_sec made that worse, and an overflowing buffer
+        # could drop an Enter and splice two barcodes into one.
+        pending = reader.read_scan()
+        while pending is not None:
+            barcode, pending = pending, None
             print(f"Scanned: {barcode}")
-            # Show "Looking up" BEFORE the Grocy round-trip, not after. The
-            # consume POST plus the details GET can take a second or more, and
-            # without this the screen sits on "Ready to Scan" the whole time,
-            # so a scan looks like it did nothing.
+            # Show "Identifying product..." BEFORE the Grocy round-trip, not
+            # after. The consume POST plus the details GET can take a second or
+            # more, and without this the screen sits on "Ready to Scan" the
+            # whole time, so a scan looks like it did nothing.
             display.show_scanning(barcode)
             try:
                 product, consumed, remaining = grocy.consume_by_barcode(
@@ -65,8 +77,11 @@ def main():
             except GrocyError as e:
                 print(f"  error: {e}", file=sys.stderr)
                 display.show_error(e.user_message)
-            time.sleep(b.get("result_display_sec", 1.5))
-            display.show_idle()
+
+            pending = reader.read_scan(timeout=result_sec)
+            if pending is None:
+                display.show_idle()
+                pending = reader.read_scan()
     except KeyboardInterrupt:
         pass
     finally:
