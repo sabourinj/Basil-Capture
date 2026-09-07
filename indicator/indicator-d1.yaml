@@ -44,6 +44,7 @@ esphome:
     priority: -100
     then:
       - delay: 500ms
+      - lambda: 'ESP_LOGI("basil", "Booted - waiting for first status message");'
       - script.execute: refresh_screen
 
 # ESP32-S3 with octal PSRAM. The display will NOT initialize without PSRAM
@@ -127,12 +128,26 @@ mqtt:
         # How long the Pi will leave this screen up. 0 on screens that don't
         # time out, which is what hides the countdown bar.
         - lambda: 'id(result_ms) = x["timeout_ms"] | 0;'
+        - lambda: |-
+            ESP_LOGI("basil", "MQTT status: %s | title='%s' body='%s' badge='%s' timeout=%dms",
+                     id(scan_status).state.c_str(), id(scan_title).state.c_str(),
+                     id(scan_body).state.c_str(), id(scan_badge).state.c_str(),
+                     id(result_ms));
         - script.execute: refresh_screen
 
   on_message:
     - topic: basil/capture/availability
       then:
-        - lambda: 'id(pi_online) = (x == "online");'
+        - lambda: |-
+            bool now_online = (x == "online");
+            if (now_online != id(pi_online)) {
+              ESP_LOGI("basil", "Pi availability: %s -> %s",
+                       id(pi_online) ? "online" : "offline",
+                       now_online ? "online" : "offline");
+            } else {
+              ESP_LOGD("basil", "Pi availability unchanged: %s", x.c_str());
+            }
+            id(pi_online) = now_online;
         - script.execute: refresh_screen
 
 globals:
@@ -490,12 +505,14 @@ script:
           // animation matters - without it a stale anim keeps writing widths
           // to a hidden object and resumes mid-drain on the next screen.
           auto stop_countdown = []() {
+            ESP_LOGD("basil", "countdown: stopped");
             lv_anim_del(id(countdown_bar), nullptr);
             lv_obj_add_flag(id(countdown_bar), LV_OBJ_FLAG_HIDDEN);
           };
 
           // Helper: restart the bar full-width and drain it over `ms`.
           auto start_countdown = [](uint32_t ms) {
+            ESP_LOGD("basil", "countdown: draining over %ums", ms);
             lv_anim_del(id(countdown_bar), nullptr);
             lv_obj_set_width(id(countdown_bar), 480);
             lv_obj_clear_flag(id(countdown_bar), LV_OBJ_FLAG_HIDDEN);
@@ -525,6 +542,7 @@ script:
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI("basil", "render: OFFLINE screen (Pi unavailable)");
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             stop_countdown();
             realign_labels();
@@ -547,6 +565,7 @@ script:
             lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_badge), "");
             lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI("basil", "render: idle (Ready to Scan)");
             lv_label_set_text(id(lbl_footer), "");
             stop_countdown();
             realign_labels();
@@ -559,6 +578,8 @@ script:
           else if (s == "error")    color = ${color_error};
           else if (s == "scanning") color = ${color_scanning};
 
+          ESP_LOGI("basil", "render: %s | title='%s' badge='%s'",
+                   s.c_str(), title.c_str(), badge.c_str());
           lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
           set_brackets(false);
           // Every optional row is hidden when empty rather than just blanked.
