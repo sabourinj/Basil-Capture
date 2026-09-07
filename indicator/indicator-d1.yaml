@@ -24,7 +24,8 @@ substitutions:
   color_scanning: "0x8E6C88"  # muted purple-lavender for "looking up"
   color_bracket: "0xC9B8C4"   # scanner reticle lavender-grey
   color_text: "0xFFFFFF"      # primary white text
-  color_text_dim: "0xC9B8C4"  # secondary lavender-grey text
+  color_text_dim: "0xC9B8C4"  # secondary lavender-grey text (dark bgs only)
+  color_badge_text: "0x3A2130" # numeral inside the white stock badge
 
 esphome:
   name: ${name}
@@ -123,6 +124,9 @@ mqtt:
         - text_sensor.template.publish:
             id: scan_detail
             state: !lambda 'return std::string(x["detail"] | "");'
+        - text_sensor.template.publish:
+            id: scan_count
+            state: !lambda 'return std::string(x["count"] | "");'
         - script.execute: refresh_screen
 
   on_message:
@@ -146,6 +150,8 @@ text_sensor:
     id: scan_body
   - platform: template
     id: scan_detail
+  - platform: template
+    id: scan_count
 
 # --- Display stack ----------------------------------------------------------
 i2c:
@@ -375,16 +381,38 @@ lvgl:
                         text_align: CENTER
                         text_color: ${color_text}
                         text_font: montserrat_28
-                    # Stock row: "3 remaining" / "Last available". Dimmer and a
-                    # size down so it reads as secondary to the product name.
-                    # Another flex child, so it just extends the column.
+                    # Stock badge: the remaining count as a numeral in a solid
+                    # white circle. A square obj with radius = half its size;
+                    # width and height must stay equal or it renders as a
+                    # lozenge. The dark numeral on white is what makes this
+                    # legible against every status background - the previous
+                    # dim-lavender text washed out badly on the success green.
+                    - obj:
+                        id: stock_badge
+                        width: 56
+                        height: 56
+                        radius: 28
+                        bg_color: ${color_text}
+                        bg_opa: COVER
+                        border_width: 0
+                        pad_all: 0
+                        widgets:
+                          - label:
+                              id: lbl_count
+                              text: ""
+                              align: CENTER
+                              text_align: CENTER
+                              text_color: ${color_badge_text}
+                              text_font: montserrat_28
+                    # Only shown when the shelf is now empty; the badge alone
+                    # carries the count in every other case.
                     - label:
                         id: lbl_detail
                         text: ""
                         width: 440
                         long_mode: WRAP
                         text_align: CENTER
-                        text_color: ${color_text_dim}
+                        text_color: ${color_text}
                         text_font: montserrat_20
               - label:
                   id: lbl_footer
@@ -439,6 +467,7 @@ script:
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             realign_labels();
@@ -449,6 +478,7 @@ script:
           std::string title = id(scan_title).state;
           std::string body  = id(scan_body).state;
           std::string detail = id(scan_detail).state;
+          std::string count  = id(scan_count).state;
 
           // Idle = the Basil "Ready to Scan" screen with reticle brackets.
           if (s == "idle" || s.empty()) {
@@ -459,6 +489,8 @@ script:
             // in the flex column, which would push the title off-center.
             lv_label_set_text(id(lbl_body), "");
             lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(id(lbl_count), "");
+            lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_detail), "");
             lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "");
@@ -474,13 +506,20 @@ script:
 
           lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
           set_brackets(false);
+          // Every optional row is hidden when empty rather than just blanked.
+          // An empty label still occupies a full line in a flex column, which
+          // would push the title off-center - "scanning" sends no body at all,
+          // so this is the common case, not an edge case.
           lv_label_set_text(id(lbl_title), title.c_str());
-          lv_label_set_text(id(lbl_body),  body.c_str());
-          lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
 
-          // Stock row only exists when the Pi sent one - "scanning" and any
-          // state where the Grocy lookup failed send "", and an empty label
-          // would still occupy a full line in the flex column.
+          lv_label_set_text(id(lbl_body), body.c_str());
+          if (body.empty()) lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+          else              lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+
+          lv_label_set_text(id(lbl_count), count.c_str());
+          if (count.empty()) lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+          else               lv_obj_clear_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+
           lv_label_set_text(id(lbl_detail), detail.c_str());
           if (detail.empty()) lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
           else                lv_obj_clear_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);

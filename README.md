@@ -58,14 +58,17 @@ tools/
 
 | Topic | Payload | Notes |
 |-------|---------|-------|
-| `basil/capture/status` | `{"status","title","body","detail","ts"}` | retained |
+| `basil/capture/status` | `{"status","title","body","count","detail","ts"}` | retained |
 | `basil/capture/availability` | `online` / `offline` | Pi LWT, retained |
 | `basil/capture/indicator/availability` | `online` / `offline` | Indicator LWT |
 
-`status` is one of `idle`, `scanning`, `success`, `error`. `detail` is the
-secondary row under the product name — `"3 remaining"` / `"Last available"` on a
-successful consume, and `""` (row hidden) everywhere else, including when the
-Grocy stock lookup fails.
+`status` is one of `idle`, `scanning`, `success`, `error`.
+
+`count` is the stock remaining after a consume, drawn as a numeral in a white
+circular badge under the product name. `detail` is an optional note beneath it,
+used only for `"Last available"` when the shelf is now empty. Both are `""`
+elsewhere, which hides them — including when the Grocy stock lookup fails, so a
+count is never invented.
 
 ## Prerequisites
 
