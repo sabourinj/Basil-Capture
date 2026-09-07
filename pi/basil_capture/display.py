@@ -98,7 +98,7 @@ class Display:
         if remaining <= 0:
             return "Last available"
         remaining = int(remaining) if remaining == int(remaining) else remaining
-        return str(remaining)
+        return f"{remaining} remaining"
 
     def show_error(self, message):
         self._publish(Status.ERROR, "Error", message)
