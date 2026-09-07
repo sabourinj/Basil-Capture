@@ -30,7 +30,10 @@ class GrocyClient:
     def consume_by_barcode(self, barcode, amount=1, spoiled=False):
         """Consume stock by barcode.
 
-        Returns (product_name, consumed_amount) on success.
+        Returns (product_name, consumed_amount, remaining) on success, where
+        `remaining` is the stock left AFTER this consume, or None if the stock
+        lookup failed. None and 0 mean different things - see _product_details.
+
         Raises GrocyError on failure.
         """
         url = f"{self.base_url}/stock/products/by-barcode/{barcode}/consume"
@@ -53,7 +56,8 @@ class GrocyClient:
             except ValueError:
                 bookings = []
             consumed = sum(abs(b.get("amount", 0)) for b in bookings) or amount
-            return self._product_name(barcode), consumed
+            name, remaining = self._product_details(barcode)
+            return name, consumed, remaining
 
         if r.status_code == 400:
             msg = self._err(r)
@@ -61,16 +65,37 @@ class GrocyClient:
 
         raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}")
 
-    def _product_name(self, barcode):
-        """GET /stock/products/by-barcode/{barcode} -> product.name"""
+    def _product_details(self, barcode):
+        """GET /stock/products/by-barcode/{barcode} -> (product.name, stock_amount)
+
+        Called AFTER the consume POST, so stock_amount is what's left rather
+        than what was there before.
+
+        Falls back to (barcode, None) on any failure. None is deliberately
+        distinct from 0: 0 means "you just took the last one", None means "we
+        couldn't find out", and the display shows nothing at all for None
+        rather than claiming the shelf is empty.
+        """
         try:
             url = f"{self.base_url}/stock/products/by-barcode/{barcode}"
             r = self.session.get(url, timeout=self.timeout)
             if r.status_code == 200:
-                return r.json().get("product", {}).get("name", barcode)
+                data = r.json()
+                name = data.get("product", {}).get("name", barcode)
+                return name, self._to_number(data.get("stock_amount"))
         except requests.RequestException:
             pass
-        return barcode
+        return barcode, None
+
+    @staticmethod
+    def _to_number(raw):
+        """Grocy returns stock amounts as strings ("3", "1.5"). None on junk."""
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _err(response):

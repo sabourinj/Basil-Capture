@@ -53,11 +53,16 @@ class Display:
         if rc == 0:
             client.publish(self.avail, "online", qos=1, retain=True)
 
-    def _publish(self, status, title, body):
+    def _publish(self, status, title, body, detail=""):
+        # "detail" is always present, even when empty. The Indicator reads it
+        # with a defaulting accessor anyway, but emitting it unconditionally
+        # keeps retained messages from older builds from being the only shape
+        # the firmware ever has to cope with.
         payload = json.dumps({
             "status": status.value,
             "title": title,
             "body": body,
+            "detail": detail,
             "ts": int(time.time()),
         })
         self.client.publish(self.topic, payload, qos=1, retain=True)
@@ -68,10 +73,25 @@ class Display:
     def show_scanning(self, barcode):
         self._publish(Status.SCANNING, "Looking up", barcode)
 
-    def show_success(self, product, amount):
+    def show_success(self, product, amount, remaining=None):
         amount = int(amount) if amount == int(amount) else amount
         body = product if amount == 1 else f"{product}\nx {amount}"
-        self._publish(Status.SUCCESS, "Consumed", body)
+        self._publish(Status.SUCCESS, "Consumed", body,
+                      detail=self._stock_line(remaining))
+
+    @staticmethod
+    def _stock_line(remaining):
+        """Render the stock row shown under the product name.
+
+        None (lookup failed) -> "" so the row is hidden entirely; claiming a
+        count we don't have is worse than showing nothing.
+        """
+        if remaining is None:
+            return ""
+        if remaining <= 0:
+            return "Last available"
+        remaining = int(remaining) if remaining == int(remaining) else remaining
+        return "1 remaining" if remaining == 1 else f"{remaining} remaining"
 
     def show_error(self, message):
         self._publish(Status.ERROR, "Error", message)

@@ -49,14 +49,19 @@ def main():
     try:
         for barcode in reader.scans():
             print(f"Scanned: {barcode}")
+            # Show "Looking up" BEFORE the Grocy round-trip, not after. The
+            # consume POST plus the details GET can take a second or more, and
+            # without this the screen sits on "Ready to Scan" the whole time,
+            # so a scan looks like it did nothing.
+            display.show_scanning(barcode)
             try:
-                product, consumed = grocy.consume_by_barcode(
+                product, consumed, remaining = grocy.consume_by_barcode(
                     barcode,
                     amount=g["consume_amount"],
                     spoiled=g.get("spoil_on_consume", False),
                 )
-                print(f"  consumed {consumed} x {product}")
-                display.show_success(product, consumed)
+                print(f"  consumed {consumed} x {product} ({remaining} remaining)")
+                display.show_success(product, consumed, remaining)
             except GrocyError as e:
                 print(f"  error: {e}", file=sys.stderr)
                 display.show_error(e.user_message)
