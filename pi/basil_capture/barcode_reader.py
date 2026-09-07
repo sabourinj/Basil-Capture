@@ -3,7 +3,17 @@
 Most USB barcode scanners present as HID keyboards: they "type" the barcode
 digits and finish with Enter. We grab the device exclusively so those
 keystrokes never leak into the Pi's console/TTY.
+
+read_scan() takes an optional timeout so the caller never has to stop reading
+the device. That matters more than it looks: while nothing reads the fd, the
+kernel buffers the scanner's keystrokes and replays them later, so scans made
+during a pause are not dropped - they pile up and fire afterwards. Worse, if
+that buffer overflows mid-barcode the Enter can be lost, leaving partial digits
+that the next scan appends to, producing a barcode nobody scanned.
 """
+import select
+import time
+
 import evdev
 from evdev import categorize, ecodes
 
@@ -28,6 +38,10 @@ class BarcodeReader:
     def __init__(self, device_path, min_length=4):
         self.device = evdev.InputDevice(device_path)
         self.min_length = min_length
+        # Decoder state lives on the instance, not in a local, so a scan that
+        # straddles a read_scan() timeout still assembles correctly.
+        self._buffer = []
+        self._shift = False
 
     def grab(self):
         """Take exclusive control so scans don't reach the console."""
@@ -39,28 +53,55 @@ class BarcodeReader:
         except Exception:
             pass
 
+    def read_scan(self, timeout=None):
+        """Return the next decoded barcode, or None if `timeout` seconds pass.
+
+        timeout=None blocks until a scan arrives. A timeout returning None does
+        not discard a half-typed barcode - those digits stay buffered and the
+        rest of the scan completes on a later call.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+
+            readable, _, _ = select.select([self.device.fd], [], [], remaining)
+            if not readable:
+                return None
+
+            for event in self.device.read():
+                code_str = self._feed(event)
+                if code_str is not None:
+                    return code_str
+
     def scans(self):
         """Generator yielding one decoded barcode per Enter keypress."""
-        buffer = []
-        shift = False
-        for event in self.device.read_loop():
-            if event.type != ecodes.EV_KEY:
-                continue
-            key = categorize(event)
-            code = key.scancode
+        while True:
+            yield self.read_scan()
 
-            if code in SHIFT_KEYS:
-                shift = key.keystate != key.key_up
-                continue
+    def _feed(self, event):
+        """Fold one event into the decoder. Returns a barcode when complete."""
+        if event.type != ecodes.EV_KEY:
+            return None
+        key = categorize(event)
+        code = key.scancode
 
-            if key.keystate != key.key_down:
-                continue
+        if code in SHIFT_KEYS:
+            self._shift = key.keystate != key.key_up
+            return None
 
-            if code in (ecodes.KEY_ENTER, ecodes.KEY_KPENTER):
-                code_str = "".join(buffer)
-                buffer = []
-                if len(code_str) >= self.min_length:
-                    yield code_str
-            elif code in KEYMAP:
-                ch = KEYMAP[code]
-                buffer.append(ch.upper() if shift else ch)
+        if key.keystate != key.key_down:
+            return None
+
+        if code in (ecodes.KEY_ENTER, ecodes.KEY_KPENTER):
+            code_str = "".join(self._buffer)
+            self._buffer = []
+            return code_str if len(code_str) >= self.min_length else None
+
+        if code in KEYMAP:
+            ch = KEYMAP[code]
+            self._buffer.append(ch.upper() if self._shift else ch)
+        return None

@@ -23,4 +23,7 @@ mqtt:
 behavior:
   consume_timeout_sec: 5
   scan_min_length: 4
-  result_display_sec: 1.5      # how long success/error stays on screen
+  # How long success/error stays on screen. Also drives the Indicator's
+  # countdown bar, which drains over exactly this span - change it here only,
+  # the firmware has no duration of its own and needs no reflash.
+  result_display_sec: 5
