@@ -35,10 +35,23 @@ class Display:
 
         # LWT: broker publishes "offline" if the Pi drops unexpectedly.
         self.client.will_set(self.avail, "offline", qos=1, retain=True)
+        self.client.on_connect = self._on_connect
 
         self.client.connect(cfg["host"], cfg.get("port", 1883), keepalive=30)
         self.client.loop_start()
-        self.client.publish(self.avail, "online", qos=1, retain=True)
+
+    def _on_connect(self, client, userdata, flags, rc):
+        """Announce "online" on EVERY connect, not just the first.
+
+        After an ungraceful drop (wifi blip, broker restart, missed keepalive)
+        the broker has already published our retained LWT "offline", and paho
+        reconnects silently underneath us. Publishing the birth message only
+        once at startup would leave that retained "offline" in place forever -
+        status messages keep flowing but the Indicator stays stuck on its
+        offline screen until the service is restarted.
+        """
+        if rc == 0:
+            client.publish(self.avail, "online", qos=1, retain=True)
 
     def _publish(self, status, title, body):
         payload = json.dumps({
