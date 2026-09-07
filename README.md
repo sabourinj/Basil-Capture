@@ -64,8 +64,8 @@ tools/
 
 `status` is one of `idle`, `scanning`, `success`, `error`.
 
-`badge` is the stock pill under the product name — the count remaining after a
-consume (`"3"`), or `"Last available"` when that was the last one. The pill
+`badge` is the stock pill under the product name — what's left after a consume
+(`"3 remaining"`), or `"Last available"` when that was the last one. The pill
 sizes to its content, so both fit the same widget. It is `""` elsewhere, which
 hides it — including when the Grocy stock lookup fails, so a count is never
 invented.

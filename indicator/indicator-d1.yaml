@@ -358,7 +358,11 @@ lvgl:
                     flex_flow: column
                     flex_align_main: center
                     flex_align_cross: center
-                    pad_row: 8
+                    # Gap between every row: title / product name / stock pill.
+                    # The column is SIZE_CONTENT and re-centered on each update,
+                    # so widening this spends the screen's spare vertical room
+                    # symmetrically instead of pushing the block off-center.
+                    pad_row: 24
                   widgets:
                     - label:
                         id: lbl_title

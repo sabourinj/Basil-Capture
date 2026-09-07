@@ -25,7 +25,7 @@ AVAIL_TOPIC = "basil/capture/availability"
 FRAMES = {
     "idle":     ("idle",     "Ready",                  "Scan an item",    ""),
     "scanning": ("scanning", "Identifying product...", "",                ""),
-    "success":  ("success",  "Consumed",               "Whole Milk\nx 2", "3"),
+    "success":  ("success",  "Consumed",               "Whole Milk\nx 2", "3 remaining"),
     "last":     ("success",  "Consumed",               "Whole Milk",      "Last available"),
     "error":    ("error",    "Error",                  "Out of stock",    ""),
 }
