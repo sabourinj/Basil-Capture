@@ -3,7 +3,14 @@
 grocy:
   base_url: "https://gr.example.com/api"   # your Grocy API base (ends in /api)
   api_key: "YOUR_GROCY_API_KEY"            # Grocy > Settings > Manage API keys
+
+  # How much to consume per scan, in the product's stock unit. One scan = one
+  # consume of this amount; there is no quantity entry on the device.
   consume_amount: 1
+
+  # Maps to Grocy's "spoiled" flag on the booking. true marks everything
+  # consumed here as spoiled/wasted rather than used, which is usually only
+  # what you want on a dedicated bin-side scanner.
   spoil_on_consume: false
 
 scanner:
@@ -21,9 +28,24 @@ mqtt:
   availability_topic: "basil/capture/availability"
 
 behavior:
+  # HTTP timeout for a single Grocy request. Note that one scan makes TWO
+  # requests - the consume POST, then a GET for the product name and remaining
+  # stock - and this applies to each. A fully unresponsive Grocy therefore
+  # leaves "Identifying product..." on screen for up to twice this value
+  # before an error appears.
   consume_timeout_sec: 5
+
+  # Shortest barcode accepted. Anything shorter is discarded rather than sent
+  # to Grocy, which filters out stray keypresses and partial reads. Raise it if
+  # you get spurious scans; lower it if you have genuinely short codes.
   scan_min_length: 4
-  # How long success/error stays on screen. Also drives the Indicator's
-  # countdown bar, which drains over exactly this span - change it here only,
-  # the firmware has no duration of its own and needs no reflash.
+
+  # How long success/error stays on screen before returning to "Ready to Scan".
+  # Also drives the Indicator's countdown bar, which drains over exactly this
+  # span - change it here only, the firmware has no duration of its own and
+  # needs no reflash.
+  #
+  # The wait is interruptible: scanning during it cuts the result screen short
+  # and processes the new item immediately, so a longer value does not slow
+  # down back-to-back scanning.
   result_display_sec: 5

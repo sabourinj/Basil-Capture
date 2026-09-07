@@ -424,17 +424,21 @@ lvgl:
                               # weight and competed with it for attention.
                               text_font: montserrat_20
               # Countdown bar: drains right-to-left over exactly the span the
-              # Pi says it will leave this screen up. Anchored BOTTOM_LEFT so
-              # shrinking the width pulls the right edge in from a fixed left
-              # edge; a centered anchor would close in from both sides.
+              # Pi says it will leave this screen up. Sits flush under the
+              # header, so y matches header_bar's height - move one and the
+              # other has to follow.
+              #
+              # Anchored TOP_LEFT so shrinking the width pulls the right edge in
+              # from a fixed left edge; a centered anchor would close in from
+              # both sides.
               #
               # Deliberately NOT a child of status_group - anything in that flex
               # column reflows the text every animation frame.
               - obj:
                   id: countdown_bar
-                  align: BOTTOM_LEFT
+                  align: TOP_LEFT
                   x: 0
-                  y: 0
+                  y: 72
                   width: 480
                   height: 6
                   radius: 0
