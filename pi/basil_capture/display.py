@@ -53,21 +53,16 @@ class Display:
         if rc == 0:
             client.publish(self.avail, "online", qos=1, retain=True)
 
-    def _publish(self, status, title, body, detail="", count=""):
-        # "detail" and "count" are always present, even when empty. The
-        # Indicator reads them with defaulting accessors anyway, but emitting
-        # them unconditionally keeps retained messages from older builds from
-        # being the only shape the firmware ever has to cope with.
-        #
-        # "count" stays a bare numeral rather than pre-rendered text: the
-        # firmware draws it inside a fixed-width badge, so any wording belongs
-        # in "detail" where it can wrap.
+    def _publish(self, status, title, body, badge=""):
+        # "badge" is always present, even when empty. The Indicator reads it
+        # with a defaulting accessor anyway, but emitting it unconditionally
+        # keeps retained messages from older builds from being the only shape
+        # the firmware ever has to cope with.
         payload = json.dumps({
             "status": status.value,
             "title": title,
             "body": body,
-            "detail": detail,
-            "count": count,
+            "badge": badge,
             "ts": int(time.time()),
         })
         self.client.publish(self.topic, payload, qos=1, retain=True)
@@ -85,29 +80,25 @@ class Display:
         amount = int(amount) if amount == int(amount) else amount
         body = product if amount == 1 else f"{product}\nx {amount}"
         self._publish(Status.SUCCESS, "Consumed", body,
-                      detail=self._stock_note(remaining),
-                      count=self._stock_count(remaining))
+                      badge=self._stock_badge(remaining))
 
     @staticmethod
-    def _stock_count(remaining):
-        """Numeral for the badge, as a string.
+    def _stock_badge(remaining):
+        """Text for the stock pill: a count, or the emptied-shelf note.
 
-        "" when the lookup failed, which hides the badge entirely - claiming a
+        The pill sizes to its content, so both cases fit in the one widget and
+        there is no separate note row to keep aligned.
+
+        "" when the lookup failed, which hides the pill entirely - claiming a
         count we don't have is worse than showing nothing. That is why None and
         0 stay distinct all the way from grocy_client to here.
         """
         if remaining is None:
             return ""
-        remaining = max(remaining, 0)
+        if remaining <= 0:
+            return "Last available"
         remaining = int(remaining) if remaining == int(remaining) else remaining
         return str(remaining)
-
-    @staticmethod
-    def _stock_note(remaining):
-        """Text under the badge. Only used to call out an emptied shelf."""
-        if remaining is None:
-            return ""
-        return "Last available" if remaining <= 0 else ""
 
     def show_error(self, message):
         self._publish(Status.ERROR, "Error", message)

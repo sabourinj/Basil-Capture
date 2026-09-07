@@ -119,14 +119,11 @@ mqtt:
             id: scan_body
             state: !lambda 'return x["body"];'
         # `| ""` defaults the field when it's absent, so a retained message
-        # published by an older Pi build (which had no "detail" key) still
+        # published by an older Pi build (which had no "badge" key) still
         # renders instead of feeding garbage to the label.
         - text_sensor.template.publish:
-            id: scan_detail
-            state: !lambda 'return std::string(x["detail"] | "");'
-        - text_sensor.template.publish:
-            id: scan_count
-            state: !lambda 'return std::string(x["count"] | "");'
+            id: scan_badge
+            state: !lambda 'return std::string(x["badge"] | "");'
         - script.execute: refresh_screen
 
   on_message:
@@ -149,9 +146,7 @@ text_sensor:
   - platform: template
     id: scan_body
   - platform: template
-    id: scan_detail
-  - platform: template
-    id: scan_count
+    id: scan_badge
 
 # --- Display stack ----------------------------------------------------------
 i2c:
@@ -382,38 +377,38 @@ lvgl:
                         text_color: ${color_text}
                         text_font: montserrat_28
                     # Stock badge: the remaining count as a numeral in a solid
-                    # white circle. A square obj with radius = half its size;
-                    # width and height must stay equal or it renders as a
-                    # lozenge. The dark numeral on white is what makes this
-                    # legible against every status background - the previous
-                    # dim-lavender text washed out badly on the success green.
+                    # white pill. radius = half the HEIGHT gives fully round
+                    # ends at any width, so SIZE_CONTENT lets it grow from "3"
+                    # to "12" to "Last available" and stay a proper tic-tac
+                    # rather than a circle that clips or a rectangle with
+                    # rounded corners. Fitting text is why the emptied-shelf
+                    # note lives in here instead of in a row of its own.
+                    #
+                    # The side padding is what keeps a single digit from
+                    # rendering narrower than it is tall. The dark numeral on
+                    # white is what makes this legible against every status
+                    # background - the dim-lavender text it replaced washed
+                    # out badly on the success green.
                     - obj:
                         id: stock_badge
-                        width: 56
-                        height: 56
-                        radius: 28
+                        width: SIZE_CONTENT
+                        height: 44
+                        radius: 22
                         bg_color: ${color_text}
                         bg_opa: COVER
                         border_width: 0
-                        pad_all: 0
+                        pad_top: 0
+                        pad_bottom: 0
+                        pad_left: 20
+                        pad_right: 20
                         widgets:
                           - label:
-                              id: lbl_count
+                              id: lbl_badge
                               text: ""
                               align: CENTER
                               text_align: CENTER
                               text_color: ${color_badge_text}
                               text_font: montserrat_28
-                    # Only shown when the shelf is now empty; the badge alone
-                    # carries the count in every other case.
-                    - label:
-                        id: lbl_detail
-                        text: ""
-                        width: 440
-                        long_mode: WRAP
-                        text_align: CENTER
-                        text_color: ${color_text}
-                        text_font: montserrat_20
               - label:
                   id: lbl_footer
                   text: ""
@@ -468,7 +463,6 @@ script:
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             realign_labels();
             return;
@@ -477,8 +471,7 @@ script:
           std::string s = id(scan_status).state;
           std::string title = id(scan_title).state;
           std::string body  = id(scan_body).state;
-          std::string detail = id(scan_detail).state;
-          std::string count  = id(scan_count).state;
+          std::string badge = id(scan_badge).state;
 
           // Idle = the Basil "Ready to Scan" screen with reticle brackets.
           if (s == "idle" || s.empty()) {
@@ -489,10 +482,8 @@ script:
             // in the flex column, which would push the title off-center.
             lv_label_set_text(id(lbl_body), "");
             lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(id(lbl_count), "");
+            lv_label_set_text(id(lbl_badge), "");
             lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(id(lbl_detail), "");
-            lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "");
             realign_labels();
             return;
@@ -516,13 +507,9 @@ script:
           if (body.empty()) lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
           else              lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
 
-          lv_label_set_text(id(lbl_count), count.c_str());
-          if (count.empty()) lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+          lv_label_set_text(id(lbl_badge), badge.c_str());
+          if (badge.empty()) lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
           else               lv_obj_clear_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
-
-          lv_label_set_text(id(lbl_detail), detail.c_str());
-          if (detail.empty()) lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
-          else                lv_obj_clear_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
 
           lv_label_set_text(id(lbl_footer), "");
           realign_labels();

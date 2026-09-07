@@ -58,17 +58,17 @@ tools/
 
 | Topic | Payload | Notes |
 |-------|---------|-------|
-| `basil/capture/status` | `{"status","title","body","count","detail","ts"}` | retained |
+| `basil/capture/status` | `{"status","title","body","badge","ts"}` | retained |
 | `basil/capture/availability` | `online` / `offline` | Pi LWT, retained |
 | `basil/capture/indicator/availability` | `online` / `offline` | Indicator LWT |
 
 `status` is one of `idle`, `scanning`, `success`, `error`.
 
-`count` is the stock remaining after a consume, drawn as a numeral in a white
-circular badge under the product name. `detail` is an optional note beneath it,
-used only for `"Last available"` when the shelf is now empty. Both are `""`
-elsewhere, which hides them — including when the Grocy stock lookup fails, so a
-count is never invented.
+`badge` is the stock pill under the product name — the count remaining after a
+consume (`"3"`), or `"Last available"` when that was the last one. The pill
+sizes to its content, so both fit the same widget. It is `""` elsewhere, which
+hides it — including when the Grocy stock lookup fails, so a count is never
+invented.
 
 ## Prerequisites
 
