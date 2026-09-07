@@ -24,7 +24,8 @@ substitutions:
   color_scanning: "0x8E6C88"  # muted purple-lavender for "looking up"
   color_bracket: "0xC9B8C4"   # scanner reticle lavender-grey
   color_text: "0xFFFFFF"      # primary white text
-  color_text_dim: "0xC9B8C4"  # secondary lavender-grey text
+  color_text_dim: "0xC9B8C4"  # secondary lavender-grey text (dark bgs only)
+  color_badge_text: "0x3A2130" # numeral inside the white stock badge
 
 esphome:
   name: ${name}
@@ -118,11 +119,11 @@ mqtt:
             id: scan_body
             state: !lambda 'return x["body"];'
         # `| ""` defaults the field when it's absent, so a retained message
-        # published by an older Pi build (which had no "detail" key) still
+        # published by an older Pi build (which had no "badge" key) still
         # renders instead of feeding garbage to the label.
         - text_sensor.template.publish:
-            id: scan_detail
-            state: !lambda 'return std::string(x["detail"] | "");'
+            id: scan_badge
+            state: !lambda 'return std::string(x["badge"] | "");'
         - script.execute: refresh_screen
 
   on_message:
@@ -145,7 +146,7 @@ text_sensor:
   - platform: template
     id: scan_body
   - platform: template
-    id: scan_detail
+    id: scan_badge
 
 # --- Display stack ----------------------------------------------------------
 i2c:
@@ -375,17 +376,39 @@ lvgl:
                         text_align: CENTER
                         text_color: ${color_text}
                         text_font: montserrat_28
-                    # Stock row: "3 remaining" / "Last available". Dimmer and a
-                    # size down so it reads as secondary to the product name.
-                    # Another flex child, so it just extends the column.
-                    - label:
-                        id: lbl_detail
-                        text: ""
-                        width: 440
-                        long_mode: WRAP
-                        text_align: CENTER
-                        text_color: ${color_text_dim}
-                        text_font: montserrat_20
+                    # Stock badge: the remaining count as a numeral in a solid
+                    # white pill. radius = half the HEIGHT gives fully round
+                    # ends at any width, so SIZE_CONTENT lets it grow from "3"
+                    # to "12" to "Last available" and stay a proper tic-tac
+                    # rather than a circle that clips or a rectangle with
+                    # rounded corners. Fitting text is why the emptied-shelf
+                    # note lives in here instead of in a row of its own.
+                    #
+                    # The side padding is what keeps a single digit from
+                    # rendering narrower than it is tall. The dark numeral on
+                    # white is what makes this legible against every status
+                    # background - the dim-lavender text it replaced washed
+                    # out badly on the success green.
+                    - obj:
+                        id: stock_badge
+                        width: SIZE_CONTENT
+                        height: 44
+                        radius: 22
+                        bg_color: ${color_text}
+                        bg_opa: COVER
+                        border_width: 0
+                        pad_top: 0
+                        pad_bottom: 0
+                        pad_left: 20
+                        pad_right: 20
+                        widgets:
+                          - label:
+                              id: lbl_badge
+                              text: ""
+                              align: CENTER
+                              text_align: CENTER
+                              text_color: ${color_badge_text}
+                              text_font: montserrat_28
               - label:
                   id: lbl_footer
                   text: ""
@@ -439,7 +462,7 @@ script:
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "waiting for scanner...");
             realign_labels();
             return;
@@ -448,7 +471,7 @@ script:
           std::string s = id(scan_status).state;
           std::string title = id(scan_title).state;
           std::string body  = id(scan_body).state;
-          std::string detail = id(scan_detail).state;
+          std::string badge = id(scan_badge).state;
 
           // Idle = the Basil "Ready to Scan" screen with reticle brackets.
           if (s == "idle" || s.empty()) {
@@ -459,8 +482,8 @@ script:
             // in the flex column, which would push the title off-center.
             lv_label_set_text(id(lbl_body), "");
             lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(id(lbl_detail), "");
-            lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(id(lbl_badge), "");
+            lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_footer), "");
             realign_labels();
             return;
@@ -474,16 +497,19 @@ script:
 
           lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
           set_brackets(false);
+          // Every optional row is hidden when empty rather than just blanked.
+          // An empty label still occupies a full line in a flex column, which
+          // would push the title off-center - "scanning" sends no body at all,
+          // so this is the common case, not an edge case.
           lv_label_set_text(id(lbl_title), title.c_str());
-          lv_label_set_text(id(lbl_body),  body.c_str());
-          lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
 
-          // Stock row only exists when the Pi sent one - "scanning" and any
-          // state where the Grocy lookup failed send "", and an empty label
-          // would still occupy a full line in the flex column.
-          lv_label_set_text(id(lbl_detail), detail.c_str());
-          if (detail.empty()) lv_obj_add_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
-          else                lv_obj_clear_flag(id(lbl_detail), LV_OBJ_FLAG_HIDDEN);
+          lv_label_set_text(id(lbl_body), body.c_str());
+          if (body.empty()) lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+          else              lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+
+          lv_label_set_text(id(lbl_badge), badge.c_str());
+          if (badge.empty()) lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+          else               lv_obj_clear_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
 
           lv_label_set_text(id(lbl_footer), "");
           realign_labels();

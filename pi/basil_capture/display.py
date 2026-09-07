@@ -53,8 +53,8 @@ class Display:
         if rc == 0:
             client.publish(self.avail, "online", qos=1, retain=True)
 
-    def _publish(self, status, title, body, detail=""):
-        # "detail" is always present, even when empty. The Indicator reads it
+    def _publish(self, status, title, body, badge=""):
+        # "badge" is always present, even when empty. The Indicator reads it
         # with a defaulting accessor anyway, but emitting it unconditionally
         # keeps retained messages from older builds from being the only shape
         # the firmware ever has to cope with.
@@ -62,7 +62,7 @@ class Display:
             "status": status.value,
             "title": title,
             "body": body,
-            "detail": detail,
+            "badge": badge,
             "ts": int(time.time()),
         })
         self.client.publish(self.topic, payload, qos=1, retain=True)
@@ -71,27 +71,34 @@ class Display:
         self._publish(Status.IDLE, "Ready", "Scan an item")
 
     def show_scanning(self, barcode):
-        self._publish(Status.SCANNING, "Looking up", barcode)
+        # The barcode is deliberately not shown - the screen just states what
+        # is happening, matching the wording used elsewhere in the app. It is
+        # still logged by main.py, which is where you'd want it for debugging.
+        self._publish(Status.SCANNING, "Identifying product...", "")
 
     def show_success(self, product, amount, remaining=None):
         amount = int(amount) if amount == int(amount) else amount
         body = product if amount == 1 else f"{product}\nx {amount}"
         self._publish(Status.SUCCESS, "Consumed", body,
-                      detail=self._stock_line(remaining))
+                      badge=self._stock_badge(remaining))
 
     @staticmethod
-    def _stock_line(remaining):
-        """Render the stock row shown under the product name.
+    def _stock_badge(remaining):
+        """Text for the stock pill: a count, or the emptied-shelf note.
 
-        None (lookup failed) -> "" so the row is hidden entirely; claiming a
-        count we don't have is worse than showing nothing.
+        The pill sizes to its content, so both cases fit in the one widget and
+        there is no separate note row to keep aligned.
+
+        "" when the lookup failed, which hides the pill entirely - claiming a
+        count we don't have is worse than showing nothing. That is why None and
+        0 stay distinct all the way from grocy_client to here.
         """
         if remaining is None:
             return ""
         if remaining <= 0:
             return "Last available"
         remaining = int(remaining) if remaining == int(remaining) else remaining
-        return "1 remaining" if remaining == 1 else f"{remaining} remaining"
+        return str(remaining)
 
     def show_error(self, message):
         self._publish(Status.ERROR, "Error", message)
