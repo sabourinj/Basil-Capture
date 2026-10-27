@@ -11,6 +11,7 @@ during a pause are not dropped - they pile up and fire afterwards. Worse, if
 that buffer overflows mid-barcode the Enter can be lost, leaving partial digits
 that the next scan appends to, producing a barcode nobody scanned.
 """
+import re
 import select
 import time
 
@@ -39,11 +40,18 @@ SHIFT_KEYMAP = {
 }
 SHIFT_KEYS = {ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT}
 
+# Scans matching any of these are dropped, not sent to Grocy. The default
+# catches URL QR codes, e.g. the "SmartLabel" codes printed next to UPCs.
+DEFAULT_IGNORE_PATTERNS = [r"^[a-z][a-z0-9+.-]*://", r"^www\."]
+
 
 class BarcodeReader:
-    def __init__(self, device_path, min_length=4):
+    def __init__(self, device_path, min_length=4, ignore_patterns=None):
         self.device = evdev.InputDevice(device_path)
         self.min_length = min_length
+        if ignore_patterns is None:
+            ignore_patterns = DEFAULT_IGNORE_PATTERNS
+        self.ignore = [re.compile(p, re.IGNORECASE) for p in ignore_patterns]
         # Decoder state lives on the instance, not in a local, so a scan that
         # straddles a read_scan() timeout still assembles correctly.
         self._buffer = []
@@ -105,7 +113,15 @@ class BarcodeReader:
         if code in (ecodes.KEY_ENTER, ecodes.KEY_KPENTER):
             code_str = "".join(self._buffer)
             self._buffer = []
-            return code_str if len(code_str) >= self.min_length else None
+            if len(code_str) < self.min_length:
+                return None
+            # Dropped here rather than in the caller so read_scan() keeps
+            # waiting out its timeout: an ignored scan doesn't cut the result
+            # screen short or show anything at all.
+            if any(p.search(code_str) for p in self.ignore):
+                print(f"Ignored: {code_str}")
+                return None
+            return code_str
 
         if self._shift and code in SHIFT_KEYMAP:
             self._buffer.append(SHIFT_KEYMAP[code])

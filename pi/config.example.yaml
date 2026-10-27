@@ -40,6 +40,15 @@ behavior:
   # you get spurious scans; lower it if you have genuinely short codes.
   scan_min_length: 4
 
+  # Scans matching any of these regexes (case-insensitive) are silently
+  # ignored - logged as "Ignored: ..." but never sent to Grocy or shown on
+  # screen. Leave this out to use the default below, which drops URL QR codes
+  # such as the "SmartLabel" codes printed next to UPCs. Setting it replaces
+  # the default, so keep these two lines if you add your own.
+  ignore_patterns:
+    - '^[a-z][a-z0-9+.-]*://'   # anything with a scheme: https://, http://, ...
+    - '^www\.'                  # bare www.example.com
+
   # How long success/error stays on screen before returning to "Ready to Scan".
   # Also drives the Indicator's countdown bar, which drains over exactly this
   # span - change it here only, the firmware has no duration of its own and

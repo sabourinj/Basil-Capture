@@ -33,7 +33,8 @@ def main():
     grocy = GrocyClient(g["base_url"], g["api_key"], timeout=b["consume_timeout_sec"])
 
     try:
-        reader = BarcodeReader(s["device_path"], min_length=b["scan_min_length"])
+        reader = BarcodeReader(s["device_path"], min_length=b["scan_min_length"],
+                               ignore_patterns=b.get("ignore_patterns"))
     except (FileNotFoundError, PermissionError) as e:
         display.show_error("Scanner not found")
         print(f"ERROR: could not open scanner at {s['device_path']}: {e}",
