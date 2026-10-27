@@ -83,7 +83,8 @@ captive_portal:
 # keeps the PNG's anti-aliased transparency instead of flattening to one
 # color, so no image_recolor is applied when it's drawn.
 image:
-  - file: basil_logo.png
+  - platform: file
+    file: basil_logo.png
     id: basil_leaf
     resize: 63x48
     type: RGB565
