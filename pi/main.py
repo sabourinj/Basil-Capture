@@ -34,7 +34,7 @@ def main():
 
     try:
         reader = BarcodeReader(s["device_path"], min_length=b["scan_min_length"],
-                               ignore_patterns=b.get("ignore_patterns"))
+                               reject_patterns=b.get("reject_patterns"))
     except (FileNotFoundError, PermissionError) as e:
         display.show_error("Scanner not found")
         print(f"ERROR: could not open scanner at {s['device_path']}: {e}",
@@ -62,22 +62,28 @@ def main():
         while pending is not None:
             barcode, pending = pending, None
             print(f"Scanned: {barcode}")
-            # Show "Identifying product..." BEFORE the Grocy round-trip, not
-            # after. The consume POST plus the details GET can take a second or
-            # more, and without this the screen sits on "Ready to Scan" the
-            # whole time, so a scan looks like it did nothing.
-            display.show_scanning(barcode)
-            try:
-                product, consumed, remaining = grocy.consume_by_barcode(
-                    barcode,
-                    amount=g["consume_amount"],
-                    spoiled=g.get("spoil_on_consume", False),
-                )
-                print(f"  consumed {consumed} x {product} ({remaining} remaining)")
-                display.show_success(product, consumed, remaining)
-            except GrocyError as e:
-                print(f"  error: {e}", file=sys.stderr)
-                display.show_error(e.user_message)
+            if reader.is_rejected(barcode):
+                # e.g. a URL QR code. Never sent to Grocy, but still shown as an
+                # error so the scan doesn't look like it went unnoticed.
+                print("  rejected: matches reject_patterns", file=sys.stderr)
+                display.show_error("Not a product code")
+            else:
+                # Show "Identifying product..." BEFORE the Grocy round-trip, not
+                # after. The consume POST plus the details GET can take a second
+                # or more, and without this the screen sits on "Ready to Scan"
+                # the whole time, so a scan looks like it did nothing.
+                display.show_scanning(barcode)
+                try:
+                    product, consumed, remaining = grocy.consume_by_barcode(
+                        barcode,
+                        amount=g["consume_amount"],
+                        spoiled=g.get("spoil_on_consume", False),
+                    )
+                    print(f"  consumed {consumed} x {product} ({remaining} remaining)")
+                    display.show_success(product, consumed, remaining)
+                except GrocyError as e:
+                    print(f"  error: {e}", file=sys.stderr)
+                    display.show_error(e.user_message)
 
             pending = reader.read_scan(timeout=result_sec)
             if pending is None:
