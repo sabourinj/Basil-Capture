@@ -30,6 +30,12 @@ KEYMAP = {
     ecodes.KEY_U: "u", ecodes.KEY_V: "v", ecodes.KEY_W: "w", ecodes.KEY_X: "x",
     ecodes.KEY_Y: "y", ecodes.KEY_Z: "z",
     ecodes.KEY_MINUS: "-", ecodes.KEY_DOT: ".", ecodes.KEY_SPACE: " ",
+    ecodes.KEY_SEMICOLON: ";", ecodes.KEY_SLASH: "/",
+}
+# Symbols the scanner types with Shift held. str.upper() only covers letters,
+# so e.g. the ":" in a Grocycode ("grcy:p:686") arrives as Shift+semicolon.
+SHIFT_KEYMAP = {
+    ecodes.KEY_SEMICOLON: ":", ecodes.KEY_MINUS: "_", ecodes.KEY_SLASH: "?",
 }
 SHIFT_KEYS = {ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT}
 
@@ -101,7 +107,9 @@ class BarcodeReader:
             self._buffer = []
             return code_str if len(code_str) >= self.min_length else None
 
-        if code in KEYMAP:
+        if self._shift and code in SHIFT_KEYMAP:
+            self._buffer.append(SHIFT_KEYMAP[code])
+        elif code in KEYMAP:
             ch = KEYMAP[code]
             self._buffer.append(ch.upper() if self._shift else ch)
         return None
