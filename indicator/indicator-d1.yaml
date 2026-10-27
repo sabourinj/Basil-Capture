@@ -9,6 +9,7 @@
 #   basil/capture/availability  "online" / "offline"  (LWT from the Pi)
 #
 # Status -> color:  success=green  error=red  scanning=blue  idle=grey
+# Errors also get bold text and one white blink when they arrive.
 #
 # First flash over USB-C (bottom port); afterwards OTA.
 # =============================================================================
@@ -88,6 +89,20 @@ image:
     type: RGB565
     transparency: alpha_channel
 
+# Bold weight for error screens. LVGL's built-in montserrat_* fonts only come
+# in one weight, so this one is pulled from Google Fonts at compile time.
+# glyphs is all of printable ASCII on purpose: error bodies can carry Grocy's
+# own error text, and any character missing here renders as a blank.
+font:
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_bold_28
+    size: 28
+    bpp: 4
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+
 ota:
   - platform: esphome
 
@@ -134,6 +149,13 @@ mqtt:
                      id(scan_body).state.c_str(), id(scan_badge).state.c_str(),
                      id(result_ms));
         - script.execute: refresh_screen
+        # Flash from here rather than inside refresh_screen, which also runs
+        # on availability changes and would re-flash a stale error screen.
+        - if:
+            condition:
+              lambda: 'return id(scan_status).state == "error";'
+            then:
+              - script.execute: flash_error
 
   on_message:
     - topic: basil/capture/availability
@@ -476,6 +498,26 @@ lvgl:
 script:
   - id: refresh_screen
     then:
+      # Font goes first, before the lambda sets text and re-centers: bold glyphs
+      # are wider, so a long error can wrap to an extra line, and the realign
+      # below has to measure the column in its final font.
+      - if:
+          condition:
+            lambda: 'return id(pi_online) && id(scan_status).state == "error";'
+          then:
+            - lvgl.label.update:
+                id: lbl_title
+                text_font: font_bold_28
+            - lvgl.label.update:
+                id: lbl_body
+                text_font: font_bold_28
+          else:
+            - lvgl.label.update:
+                id: lbl_title
+                text_font: montserrat_28
+            - lvgl.label.update:
+                id: lbl_body
+                text_font: montserrat_28
       - lambda: |-
           // Helper: show or hide all eight bracket bars (the scanner reticle).
           auto set_brackets = [](bool visible) {
@@ -605,3 +647,21 @@ script:
           else                   stop_countdown();
 
           realign_labels();
+
+  # One white blink of the background to draw the eye to an error. Only the
+  # panel color is touched, so the countdown bar keeps draining through it.
+  #
+  # The restore re-checks state instead of blindly painting red: if another
+  # message landed during the blink, refresh_screen has already painted the
+  # right color for it, and restoring red would clobber that. A second error
+  # mid-blink restarts the script (mode: restart) and blinks again.
+  - id: flash_error
+    mode: restart
+    then:
+      - lambda: |-
+          if (!id(pi_online)) return;
+          lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_text}), 0);
+      - delay: 150ms
+      - lambda: |-
+          if (id(pi_online) && id(scan_status).state == "error")
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_error}), 0);
