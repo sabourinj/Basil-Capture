@@ -9,11 +9,17 @@
 #   basil/capture/availability  "online" / "offline"  (LWT from the Pi)
 #
 # Status -> color:  success=green  error=red  scanning=blue  idle=grey
-# Errors also get bold text and one white blink when they arrive.
+# Errors show their message (the body text) in bold; no blink, title stays regular.
 #
 # Screen sleep: the backlight turns off after `screen_timeout` of quiet and
 # wakes on a scan, a touch, or the top user button (GPIO38). It stays on for as
 # long as a scanning/success/error screen is showing.
+#
+# Settings + undo: while idle a "Settings" pill sits top-right. It opens a page
+# with a slider for how long result screens stay up (3-30 s). The value lives in
+# flash and is published retained so the Pi follows it. After a successful scan
+# the same slot shows an "Undo" pill for as long as that result is up; tapping
+# it sends the scan's transaction id to the Pi, which asks Grocy to undo it.
 #
 # First flash over USB-C (bottom port); afterwards OTA.
 # =============================================================================
@@ -24,6 +30,10 @@ substitutions:
   # How long the screen stays lit once nothing is happening. Set to 10s while
   # testing, then back to something comfortable.
   screen_timeout: 60s
+  # Back-channel topics (Indicator -> Pi). Must match pi/config.yaml -> mqtt;
+  # these are also the defaults the Pi uses when the keys are absent.
+  undo_topic: basil/capture/undo
+  result_sec_topic: basil/capture/settings/result_sec
   # --- Basil brand palette (matched to the app) ---
   color_bg: "0x5A3A4E"        # deep purple body
   color_bg_dark: "0x3A2130"   # darker header/offline purple
@@ -57,6 +67,15 @@ esphome:
       # Start the sleep countdown so the screen doesn't stay lit forever if no
       # status message ever arrives.
       - script.execute: screen_sleep
+      # Restore the stored setting into the Settings page's slider and label.
+      - lvgl.slider.update:
+          id: settings_slider
+          value: !lambda 'return id(result_sec_setting);'
+      - lvgl.label.update:
+          id: lbl_setting_value
+          text:
+            format: "%d s"
+            args: ['id(result_sec_setting)']
 
 # ESP32-S3 with octal PSRAM. The display will NOT initialize without PSRAM
 # configured correctly - this is the usual cause of a black/backlight-off screen.
@@ -155,6 +174,12 @@ mqtt:
         - text_sensor.template.publish:
             id: scan_badge
             state: !lambda 'return std::string(x["badge"] | "");'
+        # Transaction id of the scan the Pi can undo ("" when none). It is a
+        # string on purpose: `| ""` only returns a string field, and Grocy's
+        # transaction ids are strings anyway.
+        - text_sensor.template.publish:
+            id: scan_undo_id
+            state: !lambda 'return std::string(x["undo_id"] | "");'
         # How long the Pi will leave this screen up. 0 on screens that don't
         # time out, which is what hides the countdown bar.
         - lambda: 'id(result_ms) = x["timeout_ms"] | 0;'
@@ -164,13 +189,6 @@ mqtt:
                      id(scan_body).state.c_str(), id(scan_badge).state.c_str(),
                      id(result_ms));
         - script.execute: refresh_screen
-        # Flash from here rather than inside refresh_screen, which also runs
-        # on availability changes and would re-flash a stale error screen.
-        - if:
-            condition:
-              lambda: 'return id(scan_status).state == "error";'
-            then:
-              - script.execute: flash_error
         # Wake the backlight for any active status (scanning/success/error).
         # An "idle" message deliberately does NOT wake a dark screen - it only
         # (re)starts the sleep countdown below.
@@ -179,6 +197,15 @@ mqtt:
               lambda: 'return id(scan_status).state != "idle" && !id(scan_status).state.empty();'
             then:
               - light.turn_on: backlight
+              # A scan result takes over from the Settings page if it's open.
+              - lvgl.page.show: main_page
+        # Offer Undo only while the result is up: hide the button when the
+        # countdown ends, even if the Pi's idle message never arrives.
+        - if:
+            condition:
+              lambda: 'return !id(scan_undo_id).state.empty() && id(result_ms) > 0;'
+            then:
+              - script.execute: undo_expire
         - script.execute: screen_sleep
 
   on_message:
@@ -202,6 +229,17 @@ mqtt:
               lambda: 'return !id(pi_online);'
             then:
               - light.turn_on: backlight
+        # Whenever the Pi comes online (including the retained "online" we get
+        # right after our own connect), hand it the on-device setting so it
+        # never runs on a stale value.
+        - if:
+            condition:
+              lambda: 'return id(pi_online);'
+            then:
+              - mqtt.publish:
+                  topic: ${result_sec_topic}
+                  payload: !lambda 'return std::to_string(id(result_sec_setting));'
+                  retain: true
         - script.execute: screen_sleep
 
 globals:
@@ -213,6 +251,13 @@ globals:
     type: int
     restore_value: no
     initial_value: "0"
+  # Seconds a result screen stays up (and how long Undo is offered). Set from
+  # the Settings page; kept in flash. The Pi's config.yaml value is only used
+  # until this is published.
+  - id: result_sec_setting
+    type: int
+    restore_value: yes
+    initial_value: "5"
 
 text_sensor:
   - platform: template
@@ -223,6 +268,8 @@ text_sensor:
     id: scan_body
   - platform: template
     id: scan_badge
+  - platform: template
+    id: scan_undo_id
 
 # --- Display stack ----------------------------------------------------------
 i2c:
@@ -267,12 +314,18 @@ output:
       ignore_strapping_warning: true
     frequency: 100Hz
 
-# --- Screen wake inputs -----------------------------------------------------
-# Touch is only used to wake the screen. It is deliberately NOT listed under
-# lvgl: `touchscreens:` because nothing on the UI is interactive.
+# --- Touch + screen wake inputs ---------------------------------------------
+# LVGL picks this touchscreen up automatically: with a single touchscreen no
+# `touchscreens:` entry is needed under lvgl:. Every release also wakes the
+# backlight. The mirror transform is the one the ESPHome device page uses for
+# this board; it has to match the display so taps land on the buttons. If taps
+# land on the opposite side of the screen, flip these.
 touchscreen:
   - platform: ft5x06
     id: sensecap_touchscreen
+    transform:
+      mirror_x: true
+      mirror_y: true
     on_release:
       then:
         - light.turn_on: backlight
@@ -339,6 +392,57 @@ lvgl:
                         src: basil_leaf
                         x: 128
                         align: LEFT_MID
+                    # Top-right slot: "Settings" while idle, "Undo" after a
+                    # scan that can be undone - never both (refresh_screen
+                    # decides). Both start hidden; the boot refresh shows the
+                    # right one. 112x48 is a comfortable finger target.
+                    - button:
+                        id: btn_settings
+                        hidden: true
+                        align: RIGHT_MID
+                        x: -12
+                        width: 112
+                        height: 48
+                        radius: 24
+                        bg_color: ${color_bg}
+                        bg_opa: COVER
+                        border_width: 0
+                        shadow_width: 0
+                        on_click:
+                          then:
+                            - lvgl.page.show: settings_page
+                            - script.execute: settings_autoclose
+                        widgets:
+                          - label:
+                              text: "Settings"
+                              align: CENTER
+                              text_color: ${color_text}
+                              text_font: montserrat_20
+                    - button:
+                        id: btn_undo
+                        hidden: true
+                        align: RIGHT_MID
+                        x: -12
+                        width: 112
+                        height: 48
+                        radius: 24
+                        bg_color: ${color_text}
+                        bg_opa: COVER
+                        border_width: 0
+                        shadow_width: 0
+                        on_click:
+                          then:
+                            - mqtt.publish:
+                                topic: ${undo_topic}
+                                payload: !lambda 'return id(scan_undo_id).state;'
+                            # Hide at once so a second tap can't send it twice.
+                            - lambda: 'lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);'
+                        widgets:
+                          - label:
+                              text: "Undo"
+                              align: CENTER
+                              text_color: ${color_badge_text}
+                              text_font: montserrat_20
               # --- Scanner reticle: four corner brackets (Basil motif) ---
               # Frame ~340w x 200h centered in the body, with "Ready to Scan"
               # sitting inside it. Bar length 60, thickness 8.
@@ -552,27 +656,109 @@ lvgl:
                   text_color: ${color_text_dim}
                   text_font: montserrat_20
 
+    # --- Settings page ------------------------------------------------------
+    # One setting: how long a result screen stays up. The Undo button is offered
+    # for the same span, so this is also the undo window. The value is published
+    # on RELEASE (not while dragging) so the broker isn't flooded.
+    - id: settings_page
+      bg_color: ${color_bg_dark}
+      bg_opa: COVER
+      widgets:
+        - label:
+            text: "Settings"
+            align: TOP_MID
+            y: 36
+            text_color: ${color_text}
+            text_font: montserrat_28
+        - label:
+            text: "Result screen time"
+            align: TOP_MID
+            y: 130
+            text_color: ${color_text_dim}
+            text_font: montserrat_20
+        - label:
+            id: lbl_setting_value
+            text: "5 s"
+            align: TOP_MID
+            y: 168
+            text_color: ${color_text}
+            text_font: montserrat_28
+        - slider:
+            id: settings_slider
+            align: TOP_MID
+            y: 250
+            width: 360
+            height: 24
+            min_value: 3
+            max_value: 30
+            value: 5
+            indicator:
+              bg_color: ${color_success}
+            knob:
+              bg_color: ${color_text}
+              pad_all: 10
+            on_value:
+              then:
+                - lvgl.label.update:
+                    id: lbl_setting_value
+                    text:
+                      format: "%.0f s"
+                      args: ['x']
+                - script.execute: settings_autoclose
+            on_release:
+              then:
+                - lambda: 'id(result_sec_setting) = (int) x;'
+                - mqtt.publish:
+                    topic: ${result_sec_topic}
+                    payload: !lambda 'return std::to_string(id(result_sec_setting));'
+                    retain: true
+        - label:
+            text: "The Undo button stays up this long too."
+            align: TOP_MID
+            y: 320
+            width: 400
+            long_mode: WRAP
+            text_align: CENTER
+            text_color: ${color_text_dim}
+            text_font: montserrat_20
+        - button:
+            id: btn_settings_done
+            align: BOTTOM_MID
+            y: -48
+            width: 200
+            height: 56
+            radius: 28
+            bg_color: ${color_text}
+            bg_opa: COVER
+            border_width: 0
+            shadow_width: 0
+            on_click:
+              then:
+                - lvgl.page.show: main_page
+            widgets:
+              - label:
+                  text: "Done"
+                  align: CENTER
+                  text_color: ${color_badge_text}
+                  text_font: montserrat_28
+
 # --- Screen refresh logic ---------------------------------------------------
 script:
   - id: refresh_screen
     then:
-      # Font goes first, before the lambda sets text and re-centers: bold glyphs
-      # are wider, so a long error can wrap to an extra line, and the realign
-      # below has to measure the column in its final font.
+      # Only the error message (lbl_body) goes bold; lbl_title keeps the regular
+      # weight set in its widget definition. Font goes first, before the lambda
+      # sets text and re-centers: bold glyphs are wider, so a long error can wrap
+      # to an extra line, and the realign below has to measure the column in its
+      # final font.
       - if:
           condition:
             lambda: 'return id(pi_online) && id(scan_status).state == "error";'
           then:
             - lvgl.label.update:
-                id: lbl_title
-                text_font: font_bold_28
-            - lvgl.label.update:
                 id: lbl_body
                 text_font: font_bold_28
           else:
-            - lvgl.label.update:
-                id: lbl_title
-                text_font: montserrat_28
             - lvgl.label.update:
                 id: lbl_body
                 text_font: montserrat_28
@@ -587,6 +773,16 @@ script:
               if (visible) lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
               else         lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             }
+          };
+
+          // Helper: the top-right slot holds either "Settings" (idle) or "Undo"
+          // (a success the Pi can undo) - never both, and nothing while
+          // scanning, on errors, or while the Pi is offline.
+          auto set_header_buttons = [](bool settings, bool undo) {
+            if (settings) lv_obj_clear_flag(id(btn_settings), LV_OBJ_FLAG_HIDDEN);
+            else          lv_obj_add_flag(id(btn_settings), LV_OBJ_FLAG_HIDDEN);
+            if (undo)     lv_obj_clear_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+            else          lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
           };
 
           // Helper: re-assert alignment after every text change. LVGL positions
@@ -638,6 +834,7 @@ script:
           if (!id(pi_online)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
             set_brackets(false);
+            set_header_buttons(false, false);
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
@@ -658,6 +855,7 @@ script:
           if (s == "idle" || s.empty()) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
             set_brackets(true);
+            set_header_buttons(true, false);
             lv_label_set_text(id(lbl_title), "Ready to Scan");
             // Hidden, not just emptied: an empty label is still a full line tall
             // in the flex column, which would push the title off-center.
@@ -682,6 +880,7 @@ script:
                    s.c_str(), title.c_str(), badge.c_str());
           lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
           set_brackets(false);
+          set_header_buttons(false, s == "success" && !id(scan_undo_id).state.empty());
           // Every optional row is hidden when empty rather than just blanked.
           // An empty label still occupies a full line in a flex column, which
           // would push the title off-center - "scanning" sends no body at all,
@@ -706,24 +905,6 @@ script:
 
           realign_labels();
 
-  # One white blink of the background to draw the eye to an error. Only the
-  # panel color is touched, so the countdown bar keeps draining through it.
-  #
-  # The restore re-checks state instead of blindly painting red: if another
-  # message landed during the blink, refresh_screen has already painted the
-  # right color for it, and restoring red would clobber that. A second error
-  # mid-blink restarts the script (mode: restart) and blinks again.
-  - id: flash_error
-    mode: restart
-    then:
-      - lambda: |-
-          if (!id(pi_online)) return;
-          lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_text}), 0);
-      - delay: 150ms
-      - lambda: |-
-          if (id(pi_online) && id(scan_status).state == "error")
-            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_error}), 0);
-
   # Backlight sleep. Every wake source (scan, touch, button, Pi going offline,
   # boot) calls this, and mode: restart means each one resets the countdown.
   # The guard keeps a stale timer from blanking a result that is still on
@@ -741,3 +922,18 @@ script:
               return !active;
           then:
             - light.turn_off: backlight
+
+  # Hide the Undo button when the result's countdown ends. mode: restart so a
+  # newer scan's countdown replaces an older one.
+  - id: undo_expire
+    mode: restart
+    then:
+      - delay: !lambda 'return id(result_ms);'
+      - lambda: 'lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);'
+
+  # Leave the Settings page after 30 s without touching the slider.
+  - id: settings_autoclose
+    mode: restart
+    then:
+      - delay: 30s
+      - lvgl.page.show: main_page
