@@ -32,8 +32,8 @@ import paho.mqtt.client as mqtt
 
 # Bounds for the on-device slider. The Indicator enforces the same range; the
 # Pi clamps again so a stray retained value can't set a zero or absurd timeout.
-MIN_RESULT_SEC = 3
-MAX_RESULT_SEC = 30
+MIN_RESULT_SEC = 2   # matches the Indicator slider and the Basil app
+MAX_RESULT_SEC = 10
 
 # The Indicator hides the Undo button the instant its countdown ends, so a tap
 # can reach the Pi a moment after the window closes. Honor taps for this long.
