@@ -3,7 +3,9 @@
 
 Reads scans from a USB HID barcode scanner, consumes the matching product in
 Grocy, and publishes a status message over MQTT that the SenseCAP Indicator D1
-subscribes to and displays.
+subscribes to and displays. The Indicator can send two things back: a tap on its
+Undo button (reverts the last scan in Grocy) and a new result-screen time from
+its Settings slider. Both are handled inside Display; see display.py.
 """
 import argparse
 import sys
@@ -31,6 +33,9 @@ def main():
 
     display = Display(cfg["mqtt"], b.get("result_display_sec", 5.0))
     grocy = GrocyClient(g["base_url"], g["api_key"], timeout=b["consume_timeout_sec"])
+    # Undo requests arrive on an MQTT worker thread; Display validates them and
+    # calls this to do the actual Grocy undo.
+    display.set_undo_handler(grocy.undo_transaction)
 
     try:
         reader = BarcodeReader(s["device_path"], min_length=b["scan_min_length"],
@@ -45,8 +50,6 @@ def main():
     reader.grab()
     display.show_idle()
     print("Scanner service started. Waiting for scans...")
-
-    result_sec = b.get("result_display_sec", 5.0)
 
     try:
         # The result screen is a WAIT, not a sleep. Scanning during it cuts the
@@ -74,19 +77,27 @@ def main():
                 # the whole time, so a scan looks like it did nothing.
                 display.show_scanning(barcode)
                 try:
-                    product, consumed, remaining = grocy.consume_by_barcode(
+                    product, consumed, remaining, undo_id = grocy.consume_by_barcode(
                         barcode,
                         amount=g["consume_amount"],
                         spoiled=g.get("spoil_on_consume", False),
                     )
-                    print(f"  consumed {consumed} x {product} ({remaining} remaining)")
-                    display.show_success(product, consumed, remaining)
+                    print(f"  consumed {consumed} x {product} ({remaining} remaining)"
+                          f" [transaction {undo_id}]")
+                    display.show_success(product, consumed, remaining,
+                                         undo_id=undo_id)
                 except GrocyError as e:
                     print(f"  error: {e}", file=sys.stderr)
                     display.show_error(e.user_message)
 
-            pending = reader.read_scan(timeout=result_sec)
+            # display.result_sec follows the Indicator's Settings slider, so it
+            # is read fresh each time rather than once at startup. The Undo
+            # button is offered for this same span.
+            pending = reader.read_scan(timeout=display.result_sec)
             if pending is None:
+                # No-op while an "Undone" result is still up: Display ends that
+                # one itself, because we may be parked in the read below by the
+                # time an undo finishes.
                 display.show_idle()
                 pending = reader.read_scan()
     except KeyboardInterrupt:

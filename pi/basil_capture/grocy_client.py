@@ -1,4 +1,4 @@
-"""Thin Grocy REST client for barcode-based stock consumption.
+"""Thin Grocy REST client for barcode-based stock consumption and its undo.
 
 Verified against the Grocy 4.6.0 OpenAPI spec:
   POST /stock/products/by-barcode/{barcode}/consume
@@ -6,7 +6,25 @@ Verified against the Grocy 4.6.0 OpenAPI spec:
     200 -> JSON ARRAY of booking objects
     400 -> {"error_message": "..."}  (unknown barcode, amount > stock, etc.)
   GET  /stock/products/by-barcode/{barcode}  -> {"product": {"name": ...}, ...}
+
+Added for undo (endpoint is listed in Grocy's OpenAPI spec; NOT yet exercised
+against a live 4.6.0 instance, so these two points still need a real test):
+  POST /stock/transactions/{transactionId}/undo
+    reverts every booking in the transaction at once. A single consume can span
+    several stock entries, which makes several bookings, so undoing the
+    transaction is the one call that puts everything back.
+  The consume response's booking objects are expected to carry `transaction_id`.
+  If they don't, consume_by_barcode returns None for it and the Indicator never
+  shows an Undo button (it fails closed rather than offering a dead button).
+
+Thread safety: the undo runs on an MQTT worker thread while the main loop may be
+consuming, and requests.Session isn't documented as thread-safe, so every HTTP
+call goes through one lock.
 """
+import sys
+import threading
+from urllib.parse import quote
+
 import requests
 
 
@@ -26,13 +44,16 @@ class GrocyClient:
             "Content-Type": "application/json",
         })
         self.timeout = timeout
+        self._lock = threading.Lock()
 
     def consume_by_barcode(self, barcode, amount=1, spoiled=False):
         """Consume stock by barcode.
 
-        Returns (product_name, consumed_amount, remaining) on success, where
-        `remaining` is the stock left AFTER this consume, or None if the stock
-        lookup failed. None and 0 mean different things - see _product_details.
+        Returns (product_name, consumed_amount, remaining, transaction_id) on
+        success, where `remaining` is the stock left AFTER this consume, or None
+        if the stock lookup failed. None and 0 mean different things - see
+        _product_details. `transaction_id` is a string, or None if Grocy's
+        response didn't include one (no undo is offered in that case).
 
         Raises GrocyError on failure.
         """
@@ -43,7 +64,8 @@ class GrocyClient:
             "spoiled": spoiled,
         }
         try:
-            r = self.session.post(url, json=payload, timeout=self.timeout)
+            with self._lock:
+                r = self.session.post(url, json=payload, timeout=self.timeout)
         except requests.Timeout:
             raise GrocyError("Timeout", "Server timeout")
         except requests.RequestException as e:
@@ -56,14 +78,52 @@ class GrocyClient:
             except ValueError:
                 bookings = []
             consumed = sum(abs(b.get("amount", 0)) for b in bookings) or amount
+            transaction_id = self._transaction_id(bookings)
+            if transaction_id is None:
+                print("  warning: consume response had no transaction_id; "
+                      "no undo will be offered for this scan", file=sys.stderr)
             name, remaining = self._product_details(barcode)
-            return name, consumed, remaining
+            return name, consumed, remaining, transaction_id
 
         if r.status_code == 400:
             msg = self._err(r)
             raise GrocyError(msg, self._friendly_400(msg))
 
         raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}")
+
+    def undo_transaction(self, transaction_id):
+        """POST /stock/transactions/{id}/undo - revert a whole consume.
+
+        Raises GrocyError on failure (already undone, unknown id, network).
+        """
+        url = (f"{self.base_url}/stock/transactions/"
+               f"{quote(str(transaction_id), safe='')}/undo")
+        try:
+            with self._lock:
+                r = self.session.post(url, timeout=self.timeout)
+        except requests.Timeout:
+            raise GrocyError("Timeout", "Server timeout")
+        except requests.RequestException as e:
+            raise GrocyError(f"Network error: {e}", "Network error")
+
+        # Grocy answers a successful undo with an empty body; accept 200 or 204.
+        if r.status_code in (200, 204):
+            return
+
+        if r.status_code == 400:
+            msg = self._err(r)
+            raise GrocyError(msg, self._friendly_undo_400(msg))
+
+        raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}")
+
+    @staticmethod
+    def _transaction_id(bookings):
+        """First transaction_id found in the booking objects, as a string."""
+        for b in bookings:
+            tid = b.get("transaction_id") if isinstance(b, dict) else None
+            if tid:
+                return str(tid)
+        return None
 
     def _product_details(self, barcode):
         """GET /stock/products/by-barcode/{barcode} -> (product.name, stock_amount)
@@ -78,7 +138,8 @@ class GrocyClient:
         """
         try:
             url = f"{self.base_url}/stock/products/by-barcode/{barcode}"
-            r = self.session.get(url, timeout=self.timeout)
+            with self._lock:
+                r = self.session.get(url, timeout=self.timeout)
             if r.status_code == 200:
                 data = r.json()
                 name = data.get("product", {}).get("name", barcode)
@@ -111,4 +172,11 @@ class GrocyClient:
             return "Out of stock"
         if "not existing" in low or "no product" in low:
             return "Unknown barcode"
+        return msg[:40]
+
+    @staticmethod
+    def _friendly_undo_400(msg):
+        low = msg.lower()
+        if "undone" in low:
+            return "Already undone"
         return msg[:40]
