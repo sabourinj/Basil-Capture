@@ -9,14 +9,14 @@
 #   basil/capture/availability  "online" / "offline"  (LWT from the Pi)
 #
 # Status -> color:  success=green  error=red  scanning=blue  idle=grey
-# Errors show their message (the body text) in bold; no blink, title stays regular.
+# The title ("Error", "Undone", ...) is always bold; the body text is regular.
 #
 # Screen sleep: the backlight turns off after `screen_timeout` of quiet and
 # wakes on a scan, a touch, or the top user button (GPIO38). It stays on for as
 # long as a scanning/success/error screen is showing.
 #
 # Settings + undo: while idle a settings gear (Material icon) sits top-right. It
-# opens a page with a slider for how long result screens stay up (3-30 s). The
+# opens a page with a slider for how long result screens stay up (2-10 s, same as the Basil app's Auto-Reset Delay). The
 # value lives in flash and is published retained so the Pi follows it. After a
 # successful scan the same slot shows an undo arrow for as long as that result is
 # up; tapping it sends the scan's transaction id to the Pi, which asks Grocy to
@@ -68,6 +68,11 @@ esphome:
       # Start the sleep countdown so the screen doesn't stay lit forever if no
       # status message ever arrives.
       - script.execute: screen_sleep
+      # Clamp the stored setting into the slider's 2-10 s range: a value saved
+      # under the old 3-30 s range would otherwise be published to the Pi as-is.
+      - lambda: |-
+          if (id(result_sec_setting) < 2)  id(result_sec_setting) = 2;
+          if (id(result_sec_setting) > 10) id(result_sec_setting) = 10;
       # Restore the stored setting into the Settings page's slider and label.
       - lvgl.slider.update:
           id: settings_slider
@@ -120,10 +125,10 @@ image:
     type: RGB565
     transparency: alpha_channel
 
-# Bold weight for error screens. LVGL's built-in montserrat_* fonts only come
-# in one weight, so this one is pulled from Google Fonts at compile time.
-# glyphs is all of printable ASCII on purpose: error bodies can carry Grocy's
-# own error text, and any character missing here renders as a blank.
+# Bold weight for the screen title (lbl_title). LVGL's built-in montserrat_*
+# fonts only come in one weight, so this one is pulled from Google Fonts at
+# compile time. glyphs is all of printable ASCII on purpose: any character
+# missing here renders as a blank.
 font:
   - file:
       type: gfonts
@@ -585,7 +590,7 @@ lvgl:
                         long_mode: WRAP
                         text_align: CENTER
                         text_color: ${color_text}
-                        text_font: montserrat_28
+                        text_font: font_bold_28
                     - label:
                         id: lbl_body
                         text: ""
@@ -669,36 +674,61 @@ lvgl:
     # for the same span, so this is also the undo window. The value is published
     # on RELEASE (not while dragging) so the broker isn't flooded.
     - id: settings_page
-      bg_color: ${color_bg_dark}
+      bg_color: ${color_bg}
       bg_opa: COVER
       widgets:
+        # Same Basil + leaf header banner as the main page (no buttons here;
+        # "Done" below is the way back).
+        - obj:
+            x: 0
+            y: 0
+            width: 480
+            height: 72
+            radius: 0
+            bg_color: ${color_bg_dark}
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            widgets:
+              - label:
+                  text: "Basil"
+                  x: 24
+                  align: LEFT_MID
+                  text_color: ${color_text}
+                  text_font: montserrat_28
+              - image:
+                  src: basil_leaf
+                  x: 128
+                  align: LEFT_MID
         - label:
             text: "Settings"
             align: TOP_MID
-            y: 36
+            y: 104
             text_color: ${color_text}
-            text_font: montserrat_28
+            text_font: font_bold_28
         - label:
             text: "Result screen time"
             align: TOP_MID
-            y: 130
+            y: 172
             text_color: ${color_text_dim}
             text_font: montserrat_20
         - label:
             id: lbl_setting_value
             text: "5 s"
             align: TOP_MID
-            y: 168
+            y: 208
             text_color: ${color_text}
             text_font: montserrat_28
+        # 2-10 s in 1 s steps, matching the Basil app's Auto-Reset Delay slider.
+        # pi/basil_capture/display.py clamps to the same range.
         - slider:
             id: settings_slider
             align: TOP_MID
-            y: 250
+            y: 276
             width: 360
             height: 24
-            min_value: 3
-            max_value: 30
+            min_value: 2
+            max_value: 10
             value: 5
             indicator:
               bg_color: ${color_success}
@@ -745,22 +775,8 @@ lvgl:
 script:
   - id: refresh_screen
     then:
-      # Only the error message (lbl_body) goes bold; lbl_title keeps the regular
-      # weight set in its widget definition. Font goes first, before the lambda
-      # sets text and re-centers: bold glyphs are wider, so a long error can wrap
-      # to an extra line, and the realign below has to measure the column in its
-      # final font.
-      - if:
-          condition:
-            lambda: 'return id(pi_online) && id(scan_status).state == "error";'
-          then:
-            - lvgl.label.update:
-                id: lbl_body
-                text_font: font_bold_28
-          else:
-            - lvgl.label.update:
-                id: lbl_body
-                text_font: montserrat_28
+      # Fonts are fixed in the widget definitions: lbl_title is bold
+      # (font_bold_28), lbl_body is regular (montserrat_28).
       - lambda: |-
           // Helper: show or hide all eight bracket bars (the scanner reticle).
           auto set_brackets = [](bool visible) {
