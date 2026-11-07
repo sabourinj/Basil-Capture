@@ -11,12 +11,19 @@
 # Status -> color:  success=green  error=red  scanning=blue  idle=grey
 # Errors also get bold text and one white blink when they arrive.
 #
+# Screen sleep: the backlight turns off after `screen_timeout` of quiet and
+# wakes on a scan, a touch, or the top user button (GPIO38). It stays on for as
+# long as a scanning/success/error screen is showing.
+#
 # First flash over USB-C (bottom port); afterwards OTA.
 # =============================================================================
 
 substitutions:
   name: basil-capture-indicator
   friendly_name: Basil Capture Indicator
+  # How long the screen stays lit once nothing is happening. Set to 10s while
+  # testing, then back to something comfortable.
+  screen_timeout: 60s
   # --- Basil brand palette (matched to the app) ---
   color_bg: "0x5A3A4E"        # deep purple body
   color_bg_dark: "0x3A2130"   # darker header/offline purple
@@ -47,6 +54,9 @@ esphome:
       - delay: 500ms
       - lambda: 'ESP_LOGI("basil", "Booted - waiting for first status message");'
       - script.execute: refresh_screen
+      # Start the sleep countdown so the screen doesn't stay lit forever if no
+      # status message ever arrives.
+      - script.execute: screen_sleep
 
 # ESP32-S3 with octal PSRAM. The display will NOT initialize without PSRAM
 # configured correctly - this is the usual cause of a black/backlight-off screen.
@@ -161,6 +171,15 @@ mqtt:
               lambda: 'return id(scan_status).state == "error";'
             then:
               - script.execute: flash_error
+        # Wake the backlight for any active status (scanning/success/error).
+        # An "idle" message deliberately does NOT wake a dark screen - it only
+        # (re)starts the sleep countdown below.
+        - if:
+            condition:
+              lambda: 'return id(scan_status).state != "idle" && !id(scan_status).state.empty();'
+            then:
+              - light.turn_on: backlight
+        - script.execute: screen_sleep
 
   on_message:
     - topic: basil/capture/availability
@@ -176,6 +195,14 @@ mqtt:
             }
             id(pi_online) = now_online;
         - script.execute: refresh_screen
+        # Wake the screen when the Pi drops offline so the "offline" notice is
+        # actually seen; it goes back to sleep after screen_timeout.
+        - if:
+            condition:
+              lambda: 'return !id(pi_online);'
+            then:
+              - light.turn_on: backlight
+        - script.execute: screen_sleep
 
 globals:
   - id: pi_online
@@ -239,6 +266,32 @@ output:
       number: GPIO45
       ignore_strapping_warning: true
     frequency: 100Hz
+
+# --- Screen wake inputs -----------------------------------------------------
+# Touch is only used to wake the screen. It is deliberately NOT listed under
+# lvgl: `touchscreens:` because nothing on the UI is interactive.
+touchscreen:
+  - platform: ft5x06
+    id: sensecap_touchscreen
+    on_release:
+      then:
+        - light.turn_on: backlight
+        - script.execute: screen_sleep
+
+# User button on top of the unit (GPIO38, normally high, so inverted).
+# internal: true keeps it out of MQTT discovery / Home Assistant.
+binary_sensor:
+  - platform: gpio
+    id: user_button
+    name: "User Button"
+    internal: true
+    pin:
+      number: GPIO38
+      inverted: true
+    on_press:
+      then:
+        - light.turn_on: backlight
+        - script.execute: screen_sleep
 
 # --- LVGL UI ----------------------------------------------------------------
 lvgl:
@@ -670,3 +723,21 @@ script:
       - lambda: |-
           if (id(pi_online) && id(scan_status).state == "error")
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_error}), 0);
+
+  # Backlight sleep. Every wake source (scan, touch, button, Pi going offline,
+  # boot) calls this, and mode: restart means each one resets the countdown.
+  # The guard keeps a stale timer from blanking a result that is still on
+  # screen; the "idle" message that follows a result restarts the countdown.
+  - id: screen_sleep
+    mode: restart
+    then:
+      - delay: ${screen_timeout}
+      - if:
+          condition:
+            lambda: |-
+              std::string s = id(scan_status).state;
+              bool active = id(pi_online) &&
+                  (s == "scanning" || s == "success" || s == "error");
+              return !active;
+          then:
+            - light.turn_off: backlight
