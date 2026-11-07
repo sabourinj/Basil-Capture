@@ -15,11 +15,12 @@
 # wakes on a scan, a touch, or the top user button (GPIO38). It stays on for as
 # long as a scanning/success/error screen is showing.
 #
-# Settings + undo: while idle a "Settings" pill sits top-right. It opens a page
-# with a slider for how long result screens stay up (3-30 s). The value lives in
-# flash and is published retained so the Pi follows it. After a successful scan
-# the same slot shows an "Undo" pill for as long as that result is up; tapping
-# it sends the scan's transaction id to the Pi, which asks Grocy to undo it.
+# Settings + undo: while idle a settings gear (Material icon) sits top-right. It
+# opens a page with a slider for how long result screens stay up (3-30 s). The
+# value lives in flash and is published retained so the Pi follows it. After a
+# successful scan the same slot shows an undo arrow for as long as that result is
+# up; tapping it sends the scan's transaction id to the Pi, which asks Grocy to
+# undo it.
 #
 # First flash over USB-C (bottom port); afterwards OTA.
 # =============================================================================
@@ -132,6 +133,15 @@ font:
     size: 28
     bpp: 4
     glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+  # Material icons for the header buttons, pulled from Google Fonts at compile
+  # time (first build downloads the font; ESPHome caches it afterwards). Only
+  # the two glyphs we draw are kept, so it costs almost nothing in flash.
+  #   e8b8 = settings (gear)    e166 = undo
+  - file: "gfonts://Material+Symbols+Outlined"
+    id: font_icons
+    size: 32
+    bpp: 4
+    glyphs: ["\U0000e8b8", "\U0000e166"]
 
 ota:
   - platform: esphome
@@ -395,17 +405,16 @@ lvgl:
                     # Top-right slot: "Settings" while idle, "Undo" after a
                     # scan that can be undone - never both (refresh_screen
                     # decides). Both start hidden; the boot refresh shows the
-                    # right one. 112x48 is a comfortable finger target.
+                    # right one. Each is a 56x56 touch target around a 32 px icon.
                     - button:
                         id: btn_settings
                         hidden: true
                         align: RIGHT_MID
                         x: -12
-                        width: 112
-                        height: 48
-                        radius: 24
-                        bg_color: ${color_bg}
-                        bg_opa: COVER
+                        width: 56
+                        height: 56
+                        radius: 28
+                        bg_opa: TRANSP
                         border_width: 0
                         shadow_width: 0
                         on_click:
@@ -414,20 +423,19 @@ lvgl:
                             - script.execute: settings_autoclose
                         widgets:
                           - label:
-                              text: "Settings"
+                              text: "\U0000e8b8"   # settings
                               align: CENTER
                               text_color: ${color_text}
-                              text_font: montserrat_20
+                              text_font: font_icons
                     - button:
                         id: btn_undo
                         hidden: true
                         align: RIGHT_MID
                         x: -12
-                        width: 112
-                        height: 48
-                        radius: 24
-                        bg_color: ${color_text}
-                        bg_opa: COVER
+                        width: 56
+                        height: 56
+                        radius: 28
+                        bg_opa: TRANSP
                         border_width: 0
                         shadow_width: 0
                         on_click:
@@ -439,10 +447,10 @@ lvgl:
                             - lambda: 'lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);'
                         widgets:
                           - label:
-                              text: "Undo"
+                              text: "\U0000e166"   # undo
                               align: CENTER
-                              text_color: ${color_badge_text}
-                              text_font: montserrat_20
+                              text_color: ${color_text}
+                              text_font: font_icons
               # --- Scanner reticle: four corner brackets (Basil motif) ---
               # Frame ~340w x 200h centered in the body, with "Ready to Scan"
               # sitting inside it. Bar length 60, thickness 8.
@@ -712,15 +720,6 @@ lvgl:
                     topic: ${result_sec_topic}
                     payload: !lambda 'return std::to_string(id(result_sec_setting));'
                     retain: true
-        - label:
-            text: "The Undo button stays up this long too."
-            align: TOP_MID
-            y: 320
-            width: 400
-            long_mode: WRAP
-            text_align: CENTER
-            text_color: ${color_text_dim}
-            text_font: montserrat_20
         - button:
             id: btn_settings_done
             align: BOTTOM_MID
