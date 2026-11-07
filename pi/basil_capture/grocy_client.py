@@ -29,10 +29,17 @@ import requests
 
 
 class GrocyError(Exception):
-    """Raised on a 400 or network failure. `.user_message` is display-safe."""
-    def __init__(self, message, user_message=None):
+    """Raised on a 400 or network failure. `.user_message` is display-safe.
+
+    `.server_side` is True when Grocy couldn't be reached or failed itself
+    (timeout, network, non-400 status) rather than refusing the request (400:
+    unknown barcode, out of stock). The scanner beeps differently for each, so
+    "try again later" never sounds like "this item is wrong".
+    """
+    def __init__(self, message, user_message=None, server_side=False):
         super().__init__(message)
         self.user_message = user_message or message
+        self.server_side = server_side
 
 
 class GrocyClient:
@@ -67,9 +74,9 @@ class GrocyClient:
             with self._lock:
                 r = self.session.post(url, json=payload, timeout=self.timeout)
         except requests.Timeout:
-            raise GrocyError("Timeout", "Server timeout")
+            raise GrocyError("Timeout", "Server timeout", server_side=True)
         except requests.RequestException as e:
-            raise GrocyError(f"Network error: {e}", "Network error")
+            raise GrocyError(f"Network error: {e}", "Network error", server_side=True)
 
         if r.status_code == 200:
             # 200 body is an ARRAY of booking objects.
@@ -89,7 +96,8 @@ class GrocyClient:
             msg = self._err(r)
             raise GrocyError(msg, self._friendly_400(msg))
 
-        raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}")
+        raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}",
+                         server_side=True)
 
     def undo_transaction(self, transaction_id):
         """POST /stock/transactions/{id}/undo - revert a whole consume.
@@ -102,9 +110,9 @@ class GrocyClient:
             with self._lock:
                 r = self.session.post(url, timeout=self.timeout)
         except requests.Timeout:
-            raise GrocyError("Timeout", "Server timeout")
+            raise GrocyError("Timeout", "Server timeout", server_side=True)
         except requests.RequestException as e:
-            raise GrocyError(f"Network error: {e}", "Network error")
+            raise GrocyError(f"Network error: {e}", "Network error", server_side=True)
 
         # Grocy answers a successful undo with an empty body; accept 200 or 204.
         if r.status_code in (200, 204):
@@ -114,7 +122,8 @@ class GrocyClient:
             msg = self._err(r)
             raise GrocyError(msg, self._friendly_undo_400(msg))
 
-        raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}")
+        raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}",
+                         server_side=True)
 
     @staticmethod
     def _transaction_id(bookings):

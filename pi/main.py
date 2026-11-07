@@ -22,6 +22,25 @@ def load_config(path):
         return yaml.safe_load(f)
 
 
+def open_scanner(s, b):
+    """Build the reader for scanner.mode: 'hid' (default) or 'ssi'.
+
+    hid  USB HID Keyboard mode, read via evdev. One-way: no host beeps.
+    ssi  Zebra/Symbol "SSI over USB CDC" mode, read as a serial port. Two-way:
+         the Pi sounds distinct beeps for each outcome (see ssi_scanner.py).
+    """
+    mode = str(s.get("mode", "hid")).lower()
+    common = dict(min_length=b["scan_min_length"],
+                  reject_patterns=b.get("reject_patterns"))
+    if mode == "ssi":
+        # Imported here so HID-only installs don't need pyserial.
+        from basil_capture.ssi_scanner import SsiScanner
+        return SsiScanner(s["device_path"], beeps=s.get("beeps"), **common)
+    if mode == "hid":
+        return BarcodeReader(s["device_path"], **common)
+    raise ValueError(f"scanner.mode must be 'hid' or 'ssi', not {mode!r}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Basil Capture barcode consume service")
     parser.add_argument("-c", "--config", default="config.yaml",
@@ -33,21 +52,30 @@ def main():
 
     display = Display(cfg["mqtt"], b.get("result_display_sec", 5.0))
     grocy = GrocyClient(g["base_url"], g["api_key"], timeout=b["consume_timeout_sec"])
-    # Undo requests arrive on an MQTT worker thread; Display validates them and
-    # calls this to do the actual Grocy undo.
-    display.set_undo_handler(grocy.undo_transaction)
-
     try:
-        reader = BarcodeReader(s["device_path"], min_length=b["scan_min_length"],
-                               reject_patterns=b.get("reject_patterns"))
-    except (FileNotFoundError, PermissionError) as e:
+        reader = open_scanner(s, b)
+    except OSError as e:  # FileNotFoundError, PermissionError, SerialException
         display.show_error("Scanner not found")
         print(f"ERROR: could not open scanner at {s['device_path']}: {e}",
               file=sys.stderr)
         display.close()
         sys.exit(1)
 
+    def undo(transaction_id):
+        # Undo requests arrive on an MQTT worker thread; Display validates them
+        # and calls this to do the actual Grocy undo. reader.beep() is
+        # thread-safe and a no-op in HID mode.
+        try:
+            grocy.undo_transaction(transaction_id)
+        except Exception:
+            reader.beep("undo_error")
+            raise
+        reader.beep("undo")
+
+    display.set_undo_handler(undo)
+
     reader.grab()
+    reader.beep("ready")
     display.show_idle()
     print("Scanner service started. Waiting for scans...")
 
@@ -70,6 +98,7 @@ def main():
                 # error so the scan doesn't look like it went unnoticed.
                 print("  rejected: matches reject_patterns", file=sys.stderr)
                 display.show_error("Not a product code")
+                reader.beep("rejected")
             else:
                 # Show "Identifying product..." BEFORE the Grocy round-trip, not
                 # after. The consume POST plus the details GET can take a second
@@ -86,9 +115,13 @@ def main():
                           f" [transaction {undo_id}]")
                     display.show_success(product, consumed, remaining,
                                          undo_id=undo_id)
+                    reader.beep("success")
                 except GrocyError as e:
                     print(f"  error: {e}", file=sys.stderr)
                     display.show_error(e.user_message)
+                    # Distinct tones: "Grocy said no to this item" vs "Grocy
+                    # is unreachable, it's not the item's fault".
+                    reader.beep("server_error" if e.server_side else "error")
 
             # display.result_sec follows the Indicator's Settings slider, so it
             # is read fresh each time rather than once at startup. The Undo

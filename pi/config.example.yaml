@@ -14,9 +14,34 @@ grocy:
   spoil_on_consume: false
 
 scanner:
-  # Find the stable path with:  ls -l /dev/input/by-id/
-  # Pick the one ending in -event-kbd for your scanner.
+  # How the scanner talks to the Pi:
+  #   hid  USB HID Keyboard mode (the scanner's factory default). One-way: the
+  #        Pi can't make it beep. device_path is an evdev node:
+  #          ls -l /dev/input/by-id/     -> the one ending in -event-kbd
+  #   ssi  Zebra/Symbol "SSI over USB CDC" mode (scan that setup barcode from
+  #        your scanner's Product Reference Guide). Two-way: the Pi sounds a
+  #        distinct beep for each outcome below. device_path is a serial port:
+  #          ls -l /dev/serial/by-id/    -> the Zebra/Symbol entry
+  mode: hid
   device_path: "/dev/input/by-id/usb-XXXX-event-kbd"
+  # device_path: "/dev/serial/by-id/usb-Zebra_Technologies_..._if00"   # ssi
+
+  # ssi mode only: which tone plays for each outcome. Leave this whole block
+  # out to use these defaults. Use a name below, a raw SSI code 0-26, or null
+  # for silence. The scanner always gives its own beep when it decodes, so
+  # success defaults to silence - no error tone is the success signal.
+  #   1..5_short_high  1..5_short_low  1..5_long_high  1..5_long_low
+  #   fast_warble  slow_warble  high_low  low_high  high_low_high
+  #   low_high_low  high_high_low_low
+  # Try them on the scanner with:  ./venv/bin/python ../tools/test_beep.py
+  beeps:
+    ready: low_high            # service started
+    success: null              # consumed
+    error: 3_long_low          # Grocy refused it: unknown barcode, out of stock
+    server_error: slow_warble  # Grocy unreachable / timed out
+    rejected: 3_long_low       # not a product code (e.g. a URL QR code)
+    undo: high_low             # undo succeeded
+    undo_error: 3_long_low     # undo failed
 
 mqtt:
   host: "192.168.1.x"          # HA / broker LAN IP (NOT the public hostname)

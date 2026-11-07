@@ -6,8 +6,8 @@ echo ">> Installing system deps..."
 sudo apt update
 sudo apt install -y python3-venv python3-pip
 
-echo ">> Adding $USER to the 'input' group (needed to read the scanner)..."
-sudo usermod -aG input "$USER"
+echo ">> Adding $USER to the 'input' and 'dialout' groups (HID and SSI scanner access)..."
+sudo usermod -aG input,dialout "$USER"
 
 echo ">> Creating virtualenv + installing Python deps..."
 python3 -m venv venv
@@ -23,6 +23,6 @@ echo
 echo "Done. Next steps:"
 echo "  1. Edit config.yaml (Grocy key, MQTT host/creds, scanner device_path)."
 echo "  2. Find your scanner path:  ls -l /dev/input/by-id/"
-echo "  3. Log out/in (or reboot) so the 'input' group membership applies."
+echo "  3. Log out/in (or reboot) so the 'input' and 'dialout' group memberships apply."
 echo "  4. Test:  ./venv/bin/python main.py"
 echo "  5. Install service:  see README (systemd section)."
