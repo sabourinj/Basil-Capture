@@ -91,6 +91,13 @@ class BarcodeReader:
                 if code_str is not None:
                     return code_str
 
+    def beep(self, event):
+        """No-op: in HID Keyboard mode the host can't drive the beeper.
+
+        Exists so main.py can call reader.beep() without caring which reader it
+        has. Use scanner.mode: ssi (see ssi_scanner.py) for host-driven beeps.
+        """
+
     def is_rejected(self, code_str):
         """True if a scan matches a reject pattern, e.g. a URL QR code."""
         return any(p.search(code_str) for p in self.reject)

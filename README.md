@@ -40,6 +40,7 @@ Status colors: **green** consumed · **red** error · **blue** looking up ·
 pi/                     Raspberry Pi capture service (Python)
   basil_capture/
     barcode_reader.py   reads the USB HID scanner via evdev
+    ssi_scanner.py      Zebra SSI-over-USB-CDC reader + host beeps
     grocy_client.py     Grocy REST client (verified vs Grocy 4.6.0)
     display.py          publishes status to MQTT
   main.py               entrypoint / main loop
@@ -52,6 +53,7 @@ indicator/
   secrets.example.yaml  wifi + mqtt secrets template
 tools/
   test_publish.py       fake status publisher to test the screen alone
+  test_beep.py          plays SSI beep tones on the scanner
 ```
 
 ## MQTT topics
@@ -81,7 +83,8 @@ and processes the new item immediately, rather than queueing behind it.
 ## Prerequisites
 
 - Raspberry Pi (Zero 2 W or better) with Raspberry Pi OS
-- USB barcode scanner in HID-keyboard mode (the default for most)
+- USB barcode scanner in HID-keyboard mode (the default for most), or a
+  Zebra/Symbol scanner in SSI over USB CDC mode for error beeps (see step 4)
 - A running Grocy instance + an API key (Grocy -> Settings -> Manage API keys)
 - An MQTT broker. These instructions assume the Home Assistant **Mosquitto
   broker** add-on, which authenticates against Home Assistant user accounts.
@@ -142,6 +145,40 @@ journalctl -u basil-capture -f     # watch logs
    with real Wi-Fi + MQTT values (same broker/creds as the Pi).
 3. **First flash over USB-C** (the port on the *bottom* of the unit). After
    that, updates go over the air.
+
+### 4. Optional: error beeps on the scanner (Zebra/Symbol SSI mode)
+
+In its default HID Keyboard mode the scanner only talks *to* the Pi, so the
+Pi can't make it beep. Zebra/Symbol scanners (e.g. the DS9308) can be
+switched to **SSI over USB CDC**, a two-way serial mode, which lets the Pi
+play a distinct tone for each outcome right at the scanner:
+
+| Outcome | Default tone |
+|---------|--------------|
+| Service started | low→high |
+| Consumed | *(silent: the scanner's own decode beep is enough)* |
+| Grocy refused it (unknown barcode, out of stock) | 3 long low |
+| Grocy unreachable / timed out | slow warble |
+| Not a product code (URL QR etc.) | 3 long low |
+| Undo succeeded / failed | high→low / 3 long low |
+
+1. Scan the **"SSI over USB CDC"** barcode in your scanner's Product
+   Reference Guide (USB Interface → USB Device Type). The scanner
+   re-enumerates as a serial port.
+2. Find it: `ls -l /dev/serial/by-id/` (the Zebra/Symbol entry).
+3. In `config.yaml` set `scanner.mode: ssi` and point `device_path` at that
+   entry. Tones are tunable under `scanner.beeps`.
+4. Try the tones (with the service stopped, since it holds the port):
+   ```bash
+   ./venv/bin/python ../tools/test_beep.py /dev/serial/by-id/usb-Zebra...
+   ```
+   Each line should report `ACK`. If none do, the scanner isn't in SSI mode.
+
+Your user needs to be in the `dialout` group (`setup.sh` does this). If
+`ModemManager` is installed (it isn't on Raspberry Pi OS Lite), it may probe
+the port at boot. Either remove it or blacklist the scanner for it.
+
+To go back, scan the "USB Keyboard (HID)" barcode and set `mode: hid`.
 
 ## Testing the screen without a scanner
 
