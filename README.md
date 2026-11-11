@@ -63,6 +63,7 @@ tools/
 | `basil/capture/status` | `{"status","title","body","badge","timeout_ms","ts"}` | retained |
 | `basil/capture/availability` | `online` / `offline` | Pi LWT, retained |
 | `basil/capture/indicator/availability` | `online` / `offline` | Indicator LWT |
+| `basil/capture/ready` | `ready` | Pi, NOT retained: scanner is open. Sent at startup and whenever the Indicator connects; ends the Indicator's Starting Up screen |
 
 `status` is one of `idle`, `scanning`, `success`, `error`.
 
