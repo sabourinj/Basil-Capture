@@ -11,6 +11,9 @@
 # Status -> color:  success=green  error=red  scanning=blue  idle=grey
 # The title ("Error", "Undone", ...) is always bold; the body text is regular.
 #
+# Offline screen: shown when the Pi is unavailable ("waiting for scanner...")
+# or when the Indicator itself loses the MQTT broker ("can't reach server...").
+#
 # Screen sleep: the backlight turns off after `screen_timeout` of quiet and
 # wakes on a scan, a touch, or the top user button (GPIO38). It stays on for as
 # long as a scanning/success/error screen is showing.
@@ -179,6 +182,29 @@ mqtt:
     topic: basil/capture/indicator/availability
     payload: offline
 
+  # Our own link to the broker. Without these the last screen (usually "Ready
+  # to Scan") just stays up when the broker goes away, since nothing new can
+  # arrive to change it. On reconnect ESPHome resubscribes and the broker
+  # replays the retained status/availability, so the screen catches up.
+  on_connect:
+    - lambda: |-
+        if (!id(broker_up)) ESP_LOGI("basil", "MQTT broker connected");
+        id(broker_up) = true;
+    - script.execute: refresh_screen
+  on_disconnect:
+    - lambda: |-
+        if (id(broker_up)) ESP_LOGW("basil", "MQTT broker disconnected");
+        id(broker_up) = false;
+    - script.execute: refresh_screen
+    # Wake the screen so the outage is seen, but not during startup, where
+    # the Starting Up screen already says we're connecting.
+    - if:
+        condition:
+          lambda: 'return !id(starting_up);'
+        then:
+          - light.turn_on: backlight
+          - script.execute: screen_sleep
+
   on_json_message:
     - topic: basil/capture/status
       then:
@@ -283,6 +309,7 @@ mqtt:
             if (id(starting_up)) ESP_LOGI("basil", "Pi ready - startup complete");
             id(starting_up) = false;
             id(pi_online) = true;
+            id(broker_up) = true;  // a message arrived, so we're connected
         - script.execute: refresh_screen
         - script.execute: screen_sleep
 
@@ -297,6 +324,12 @@ globals:
     type: bool
     restore_value: no
     initial_value: "true"
+  # Whether we're connected to the MQTT broker right now (see mqtt:
+  # on_connect / on_disconnect). While false, the offline screen shows.
+  - id: broker_up
+    type: bool
+    restore_value: no
+    initial_value: "false"
   - id: result_ms
     type: int
     restore_value: no
@@ -931,7 +964,25 @@ script:
             return;
           }
 
-          // Pi offline overrides everything.
+          // Broker unreachable: we can't hear the Pi at all, so whatever its
+          // last message said may no longer be true. Same look as the Pi
+          // offline screen; the footer says which link is down.
+          if (!id(broker_up)) {
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
+            set_brackets(false);
+            set_header_buttons(false, false);
+            lv_label_set_text(id(lbl_title), "Basil Capture");
+            lv_label_set_text(id(lbl_body), "offline");
+            lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI("basil", "render: OFFLINE screen (MQTT broker unreachable)");
+            lv_label_set_text(id(lbl_footer), "can't reach server...");
+            stop_countdown();
+            realign_labels();
+            return;
+          }
+
+          // Pi offline overrides everything else.
           if (!id(pi_online)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
             set_brackets(false);
@@ -1018,7 +1069,7 @@ script:
           condition:
             lambda: |-
               std::string s = id(scan_status).state;
-              bool active = id(pi_online) &&
+              bool active = id(pi_online) && id(broker_up) &&
                   (s == "scanning" || s == "success" || s == "error");
               // Stay lit while starting up so it's clear the unit is alive.
               return !active && !id(starting_up);
