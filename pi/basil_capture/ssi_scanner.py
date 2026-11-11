@@ -75,11 +75,11 @@ BEEP_CODES = {
 DEFAULT_BEEPS = {
     "ready": "low_high",            # service started, scanner connected
     "success": None,                # consumed
-    "error": "3_long_low",          # Grocy refused: unknown barcode, out of stock
-    "server_error": "slow_warble",  # Grocy unreachable / timed out / 5xx
-    "rejected": "3_long_low",       # not a product code (e.g. a URL QR)
+    "error": "3_short_high",        # Grocy refused: unknown barcode, out of stock
+    "server_error": "fast_warble",  # Grocy unreachable / timed out / 5xx
+    "rejected": "3_short_high",     # not a product code (e.g. a URL QR)
     "undo": "high_low",             # undo succeeded
-    "undo_error": "3_long_low",     # undo failed
+    "undo_error": "3_short_high",   # undo failed
 }
 
 
