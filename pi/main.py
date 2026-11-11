@@ -77,6 +77,9 @@ def main():
     reader.grab()
     reader.beep("ready")
     display.show_idle()
+    # Only now - scanner open and grabbed - does the Indicator leave its
+    # Starting Up screen.
+    display.mark_ready()
     print("Scanner service started. Waiting for scans...")
 
     try:

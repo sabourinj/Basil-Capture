@@ -31,10 +31,16 @@ substitutions:
   # How long the screen stays lit once nothing is happening. Set to 10s while
   # testing, then back to something comfortable.
   screen_timeout: 60s
+  # After power-on, how long to show "Starting Up" while waiting for the Pi's
+  # live "ready" before giving up and showing the offline screen. Covers the
+  # Pi booting at the same time as the Indicator (e.g. after a power cut).
+  startup_grace: 90s
   # Back-channel topics (Indicator -> Pi). Must match pi/config.yaml -> mqtt;
   # these are also the defaults the Pi uses when the keys are absent.
   undo_topic: basil/capture/undo
   result_sec_topic: basil/capture/settings/result_sec
+  # Pi -> Indicator, NOT retained: "my scanner is open". Ends Starting Up.
+  ready_topic: basil/capture/ready
   # --- Basil brand palette (matched to the app) ---
   color_bg: "0x5A3A4E"        # deep purple body
   color_bg_dark: "0x3A2130"   # darker header/offline purple
@@ -53,12 +59,11 @@ esphome:
   name_add_mac_suffix: false
   platformio_options:
     board_build.flash_mode: dio
-  # Run the same refresh logic at boot so the initial "Ready to Scan" screen is
-  # pixel-identical to the idle screen shown after MQTT messages arrive. Without
-  # this, the boot render uses the static LVGL layout (labels not yet re-aligned),
-  # which is what caused the title to sit slightly higher until the first message.
-  # priority -100 runs late, after the display + LVGL are initialized; the short
-  # delay lets the first LVGL layout pass settle before we re-align.
+  # Run the same refresh logic at boot so the "Starting Up" screen is laid out
+  # exactly as refresh_screen draws it. priority -100 runs late: ESPHome holds
+  # boot here until Wi-Fi and MQTT have connected, so until then the static LVGL
+  # layout (also "Starting Up") is what's shown. The short delay lets the first
+  # LVGL layout pass settle before we re-align.
   on_boot:
     priority: -100
     then:
@@ -68,6 +73,15 @@ esphome:
       # Start the sleep countdown so the screen doesn't stay lit forever if no
       # status message ever arrives.
       - script.execute: screen_sleep
+      # Bound how long Starting Up can last if the Pi never checks in.
+      - script.execute: startup_timeout
+      # Ask a Pi that's already up for a fresh "ready". The birth message does
+      # the same, but it can go out before our subscription to ${ready_topic}
+      # is active, so the reply would be missed. By on_boot we're subscribed.
+      - mqtt.publish:
+          topic: basil/capture/indicator/availability
+          payload: online
+          retain: true
       # Clamp the stored setting into the slider's 2-10 s range: a value saved
       # under the old 3-30 s range would otherwise be published to the Pi as-is.
       - lambda: |-
@@ -236,12 +250,16 @@ mqtt:
               ESP_LOGD("basil", "Pi availability unchanged: %s", x.c_str());
             }
             id(pi_online) = now_online;
+            // A retained "online" does NOT end Starting Up: after a power cut
+            // it's stale until the broker's keepalive check publishes the
+            // Pi's LWT. Only the live message on ${ready_topic} does.
         - script.execute: refresh_screen
         # Wake the screen when the Pi drops offline so the "offline" notice is
-        # actually seen; it goes back to sleep after screen_timeout.
+        # actually seen; it goes back to sleep after screen_timeout. Not during
+        # startup, where "offline" is just the Pi's stale retained LWT.
         - if:
             condition:
-              lambda: 'return !id(pi_online);'
+              lambda: 'return !id(pi_online) && !id(starting_up);'
             then:
               - light.turn_on: backlight
         # Whenever the Pi comes online (including the retained "online" we get
@@ -257,8 +275,25 @@ mqtt:
                   retain: true
         - script.execute: screen_sleep
 
+    # Live (never retained) "ready" from the Pi, sent once its scanner is open
+    # and again whenever we connect. This is what ends the Starting Up screen.
+    - topic: ${ready_topic}
+      then:
+        - lambda: |-
+            if (id(starting_up)) ESP_LOGI("basil", "Pi ready - startup complete");
+            id(starting_up) = false;
+            id(pi_online) = true;
+        - script.execute: refresh_screen
+        - script.execute: screen_sleep
+
 globals:
   - id: pi_online
+    type: bool
+    restore_value: no
+    initial_value: "true"
+  # True from power-on until the Pi sends its live "ready" (or startup_grace
+  # runs out). While set, refresh_screen shows the Starting Up screen.
+  - id: starting_up
     type: bool
     restore_value: no
     initial_value: "true"
@@ -463,6 +498,7 @@ lvgl:
               # Top-left
               - obj:
                   id: br_tl_h
+                  hidden: true
                   x: 60
                   y: 159
                   width: 64
@@ -474,6 +510,7 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_tl_v
+                  hidden: true
                   x: 60
                   y: 159
                   width: 8
@@ -486,6 +523,7 @@ lvgl:
               # Top-right
               - obj:
                   id: br_tr_h
+                  hidden: true
                   x: 356
                   y: 159
                   width: 64
@@ -497,6 +535,7 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_tr_v
+                  hidden: true
                   x: 412
                   y: 159
                   width: 8
@@ -509,6 +548,7 @@ lvgl:
               # Bottom-left
               - obj:
                   id: br_bl_h
+                  hidden: true
                   x: 60
                   y: 361
                   width: 64
@@ -520,6 +560,7 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_bl_v
+                  hidden: true
                   x: 60
                   y: 305
                   width: 8
@@ -532,6 +573,7 @@ lvgl:
               # Bottom-right
               - obj:
                   id: br_br_h
+                  hidden: true
                   x: 356
                   y: 361
                   width: 64
@@ -543,6 +585,7 @@ lvgl:
                   pad_all: 0
               - obj:
                   id: br_br_v
+                  hidden: true
                   x: 412
                   y: 305
                   width: 8
@@ -583,17 +626,34 @@ lvgl:
                     # symmetrically instead of pushing the block off-center.
                     pad_row: 24
                   widgets:
+                    # The static (pre-boot) state of every widget below is the
+                    # "Starting Up" screen. on_boot doesn't run until Wi-Fi and
+                    # MQTT have connected, so this layout is what's on the glass
+                    # for those first seconds - it must not claim to be ready.
                     - label:
                         id: lbl_title
-                        text: "Ready to Scan"
+                        text: "Starting Up"
                         width: 440
                         long_mode: WRAP
                         text_align: CENTER
                         text_color: ${color_text}
                         text_font: font_bold_28
+                    # Only shown on the Starting Up screen.
+                    - spinner:
+                        id: boot_spinner
+                        width: 56
+                        height: 56
+                        spin_time: 1200ms
+                        arc_length: 60deg
+                        arc_width: 6
+                        arc_color: ${color_bg_dark}
+                        indicator:
+                          arc_width: 6
+                          arc_color: ${color_text}
                     - label:
                         id: lbl_body
                         text: ""
+                        hidden: true
                         width: 440
                         long_mode: WRAP
                         text_align: CENTER
@@ -614,6 +674,9 @@ lvgl:
                     # out badly on the success green.
                     - obj:
                         id: stock_badge
+                        # Hidden until a result has a count. Visible-but-empty it
+                        # renders as a bare white dot under the title.
+                        hidden: true
                         width: SIZE_CONTENT
                         height: 44
                         radius: 22
@@ -660,7 +723,7 @@ lvgl:
                   pad_all: 0
               - label:
                   id: lbl_footer
-                  text: ""
+                  text: "connecting..."
                   align: BOTTOM_MID
                   y: -16
                   width: 440
@@ -845,6 +908,29 @@ script:
             lv_obj_align(id(lbl_footer),   LV_ALIGN_BOTTOM_MID, 0, -16);
           };
 
+          // Spinner belongs to the Starting Up screen only.
+          if (id(starting_up)) lv_obj_clear_flag(id(boot_spinner), LV_OBJ_FLAG_HIDDEN);
+          else                 lv_obj_add_flag(id(boot_spinner), LV_OBJ_FLAG_HIDDEN);
+
+          // Starting up: no live "ready" from the Pi since we booted. Its
+          // retained availability/status can be stale in either direction
+          // while it boots, so show neither "offline" nor "Ready to Scan"
+          // until it checks in or the grace runs out.
+          if (id(starting_up)) {
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
+            set_brackets(false);
+            set_header_buttons(false, false);
+            lv_label_set_text(id(lbl_title), "Starting Up");
+            lv_label_set_text(id(lbl_body), "");
+            lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(stock_badge), LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(id(lbl_footer), "waiting for scanner...");
+            ESP_LOGI("basil", "render: starting up");
+            stop_countdown();
+            realign_labels();
+            return;
+          }
+
           // Pi offline overrides everything.
           if (!id(pi_online)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
@@ -934,7 +1020,8 @@ script:
               std::string s = id(scan_status).state;
               bool active = id(pi_online) &&
                   (s == "scanning" || s == "success" || s == "error");
-              return !active;
+              // Stay lit while starting up so it's clear the unit is alive.
+              return !active && !id(starting_up);
           then:
             - light.turn_off: backlight
 
@@ -945,6 +1032,22 @@ script:
     then:
       - delay: !lambda 'return id(result_ms);'
       - lambda: 'lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);'
+
+  # Give the Pi `startup_grace` to check in after we connect. If it hasn't by
+  # then, drop out of Starting Up so the real offline screen shows.
+  - id: startup_timeout
+    then:
+      - delay: ${startup_grace}
+      - if:
+          condition:
+            lambda: 'return id(starting_up);'
+          then:
+            - lambda: |-
+                ESP_LOGW("basil", "Pi did not come online within ${startup_grace}");
+                id(starting_up) = false;
+            - script.execute: refresh_screen
+            - light.turn_on: backlight
+            - script.execute: screen_sleep
 
   # Leave the Settings page after 30 s without touching the slider.
   - id: settings_autoclose

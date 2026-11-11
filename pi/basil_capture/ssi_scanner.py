@@ -52,6 +52,12 @@ BEEP_NONE = 0xFF  # "no beep" for PARAM_SEND's beep field
 # so there'd be no telling where one barcode ends and the next begins.
 PARAM_DECODE_PACKET_FORMAT = 0xEE
 
+# Startup handshake: resend the setup command every HANDSHAKE_RETRY_SEC until
+# the scanner replies, and give up after STARTUP_TIMEOUT_SEC (systemd then
+# restarts the service and we try again).
+HANDSHAKE_RETRY_SEC = 1.0
+STARTUP_TIMEOUT_SEC = 30.0
+
 # SSI BEEP codes, by name. Config may use either a name or a raw integer.
 BEEP_CODES = {
     "1_short_high": 0x00, "2_short_high": 0x01, "3_short_high": 0x02,
@@ -136,14 +142,40 @@ class SsiScanner:
         self._rx = bytearray()
         self._parts = []        # data from a multipacket DECODE_DATA so far
         self._last_packet = None
+        # Set by _handle_packet whenever a valid packet arrives from the
+        # scanner - the only real proof its firmware is up and talking.
+        self._heard = False
+        # A scan that arrived during the startup handshake, handed out first.
+        self._pending = []
 
         self.port.reset_input_buffer()
-        # Packeted decode data is required to delimit scans. Sent as a
-        # temporary change on every start so the scanner's stored settings
-        # aren't rewritten each boot; it still sticks until power-cycle, and a
-        # power-cycle means a new /dev/ttyACM and a service restart anyway.
-        self._send(build_packet(
-            PARAM_SEND, bytes([BEEP_NONE, PARAM_DECODE_PACKET_FORMAT, 0x01])))
+        self._handshake()
+
+    def _handshake(self, timeout=STARTUP_TIMEOUT_SEC):
+        """Wait until the scanner actually answers, or raise TimeoutError.
+
+        The serial port can exist before the scanner's firmware is responding
+        (it enumerates on USB first, then finishes booting), so opening it
+        proves nothing. Instead we send the setup command and wait for the
+        scanner's ACK, resending until it replies.
+
+        Packeted decode data is required to delimit scans. Sent as a temporary
+        change on every start so the scanner's stored settings aren't rewritten
+        each boot; it still sticks until power-cycle, and a power-cycle means a
+        new /dev/ttyACM and a service restart anyway.
+        """
+        setup = build_packet(
+            PARAM_SEND, bytes([BEEP_NONE, PARAM_DECODE_PACKET_FORMAT, 0x01]))
+        deadline = time.monotonic() + timeout
+        while not self._heard:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"scanner did not respond within {timeout:g}s")
+            self._send(setup)
+            code = self.read_scan(timeout=HANDSHAKE_RETRY_SEC)
+            if code is not None:
+                self._pending.append(code)
+        print("Scanner responded - SSI link is up")
 
     # -------------------------------------------------- BarcodeReader API
 
@@ -165,6 +197,8 @@ class SsiScanner:
         Like BarcodeReader, a timeout never discards a partial packet: the
         bytes stay in self._rx and the packet completes on a later call.
         """
+        if self._pending:
+            return self._pending.pop(0)
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             # Drain anything already buffered before waiting for more.
@@ -236,6 +270,7 @@ class SsiScanner:
 
     def _handle_packet(self, body):
         opcode, status, data = body[1], body[3], body[4:]
+        self._heard = True  # any valid packet (even a NAK) means it's alive
 
         if opcode == CMD_ACK:
             return None  # scanner confirming one of our commands

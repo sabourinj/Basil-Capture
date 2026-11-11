@@ -17,6 +17,11 @@ Both topics have defaults (see __init__), so config.yaml needs no new keys.
 Messages are retained so the Indicator shows the current state immediately on
 (re)connect, and a Last-Will (LWT) marks the Pi offline if the service dies.
 
+The one exception is `ready_topic`: a NOT-retained "ready", sent once the
+scanner is open (and again whenever the Indicator connects). A retained
+"online" can be stale after a power cut, so the Indicator waits for this live
+message before leaving its Starting Up screen.
+
 Threading: paho runs its network loop on its own thread, and an undo request
 needs a Grocy round-trip, so each one is handled on a short-lived worker
 thread. Everything that decides "what is on screen right now" (the generation
@@ -54,6 +59,18 @@ class Display:
         self.undo_topic = cfg.get("undo_topic", "basil/capture/undo")
         self.setting_topic = cfg.get("result_sec_topic",
                                      "basil/capture/settings/result_sec")
+        # Live "I'm ready" signal: NOT retained, so receiving it proves the Pi
+        # is running right now with its scanner open. The retained
+        # availability topic can't prove that - after a power cut it still
+        # says "online" until the broker's keepalive check expires.
+        self.ready_topic = cfg.get("ready_topic", "basil/capture/ready")
+        # The Indicator's birth/LWT topic. When it (re)connects we answer with
+        # a fresh ready so a freshly booted Indicator doesn't have to wait.
+        self.indicator_avail = cfg.get("indicator_availability_topic",
+                                       "basil/capture/indicator/availability")
+        # Set by mark_ready() once the scanner is open. Until then the Pi does
+        # not announce itself "online" at all.
+        self._ready = False
 
         # How long a result is left on screen before idle. config.yaml's
         # result_display_sec is only the starting value: once the Indicator
@@ -116,14 +133,39 @@ class Display:
 
         Subscriptions need the same treatment: with a clean session the broker
         forgets them on disconnect.
+
+        "online" and ready are only sent once the scanner is open (see
+        mark_ready). Connecting to the broker alone doesn't mean scans work.
         """
         if rc == 0:
-            client.publish(self.avail, "online", qos=1, retain=True)
-            client.subscribe([(self.undo_topic, 1), (self.setting_topic, 1)])
+            client.subscribe([(self.undo_topic, 1), (self.setting_topic, 1),
+                              (self.indicator_avail, 1)])
+            if self._ready:
+                self._announce_ready()
+
+    def mark_ready(self):
+        """The scanner is open and listening: tell the Indicator.
+
+        Call once at startup, after the scanner is initialized. Reconnects
+        re-announce on their own (see _on_connect).
+        """
+        self._ready = True
+        self._announce_ready()
+
+    def _announce_ready(self):
+        self.client.publish(self.avail, "online", qos=1, retain=True)
+        self.client.publish(self.ready_topic, "ready", qos=1, retain=False)
 
     def _on_message(self, client, userdata, msg):
         payload = msg.payload.decode("utf-8", errors="replace").strip()
-        if msg.topic == self.setting_topic:
+        if msg.topic == self.indicator_avail:
+            # The Indicator just (re)booted or reconnected and is waiting on
+            # its Starting Up screen. The retained copy of its last birth
+            # message arrives here too; answering it is harmless.
+            if payload == "online" and self._ready:
+                self.client.publish(self.ready_topic, "ready", qos=1,
+                                    retain=False)
+        elif msg.topic == self.setting_topic:
             self._apply_setting(payload)
         elif msg.topic == self.undo_topic:
             # An undo is an action, never state. A retained one would replay on
