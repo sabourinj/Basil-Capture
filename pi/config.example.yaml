@@ -37,11 +37,11 @@ scanner:
   beeps:
     ready: low_high            # service started
     success: null              # consumed
-    error: 3_long_low          # Grocy refused it: unknown barcode, out of stock
-    server_error: slow_warble  # Grocy unreachable / timed out
-    rejected: 3_long_low       # not a product code (e.g. a URL QR code)
+    error: 3_short_high        # Grocy refused it: unknown barcode, out of stock
+    server_error: fast_warble  # Grocy unreachable / timed out
+    rejected: 3_short_high     # not a product code (e.g. a URL QR code)
     undo: high_low             # undo succeeded
-    undo_error: 3_long_low     # undo failed
+    undo_error: 3_short_high   # undo failed
 
 mqtt:
   host: "192.168.1.x"          # HA / broker LAN IP (NOT the public hostname)

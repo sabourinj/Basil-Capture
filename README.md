@@ -157,10 +157,10 @@ play a distinct tone for each outcome right at the scanner:
 |---------|--------------|
 | Service started | low→high |
 | Consumed | *(silent: the scanner's own decode beep is enough)* |
-| Grocy refused it (unknown barcode, out of stock) | 3 long low |
-| Grocy unreachable / timed out | slow warble |
-| Not a product code (URL QR etc.) | 3 long low |
-| Undo succeeded / failed | high→low / 3 long low |
+| Grocy refused it (unknown barcode, out of stock) | 3 short high |
+| Grocy unreachable / timed out | fast warble |
+| Not a product code (URL QR etc.) | 3 short high |
+| Undo succeeded / failed | high→low / 3 short high |
 
 1. Scan the **"SSI over USB CDC"** barcode in your scanner's Product
    Reference Guide (USB Interface → USB Device Type). The scanner
