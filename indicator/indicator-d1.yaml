@@ -823,7 +823,7 @@ lvgl:
             text_color: ${color_text}
             text_font: font_bold_28
         - label:
-            text: "Result screen time"
+            text: "Result display timeout"
             align: TOP_MID
             y: 140
             text_color: ${color_text_dim}
@@ -867,7 +867,7 @@ lvgl:
                     payload: !lambda 'return std::to_string(id(result_sec_setting));'
                     retain: true
         - label:
-            text: "Screen timeout"
+            text: "Screen backlight timeout"
             align: TOP_MID
             y: 260
             text_color: ${color_text_dim}
