@@ -14,13 +14,15 @@
 # Offline screen: shown when the Pi is unavailable ("waiting for scanner...")
 # or when the Indicator itself loses the MQTT broker ("can't reach server...").
 #
-# Screen sleep: the backlight turns off after `screen_timeout` of quiet and
-# wakes on a scan, a touch, or the top user button (GPIO38). It stays on for as
-# long as a scanning/success/error screen is showing.
+# Screen sleep: the backlight turns off after the Settings page's "Screen
+# timeout" of quiet (15 s - 10 min, or Never; default 1 min) and wakes on a
+# scan, a touch, or the top user button (GPIO38). It stays on for as long as a
+# scanning/success/error screen is showing.
 #
 # Settings + undo: while idle a settings gear (Material icon) sits top-right. It
-# opens a page with a slider for how long result screens stay up (2-10 s, same as the Basil app's Auto-Reset Delay). The
-# value lives in flash and is published retained so the Pi follows it. After a
+# opens a page with two sliders: how long result screens stay up (2-10 s, same
+# as the Basil app's Auto-Reset Delay) and the screen timeout. Both live in
+# flash; the result time is also published retained so the Pi follows it. After a
 # successful scan the same slot shows an undo arrow for as long as that result is
 # up; tapping it sends the scan's transaction id to the Pi, which asks Grocy to
 # undo it.
@@ -31,9 +33,6 @@
 substitutions:
   name: basil-capture-indicator
   friendly_name: Basil Capture Indicator
-  # How long the screen stays lit once nothing is happening. Set to 10s while
-  # testing, then back to something comfortable.
-  screen_timeout: 60s
   # After power-on, how long to show "Starting Up" while waiting for the Pi's
   # live "ready" before giving up and showing the offline screen. Covers the
   # Pi booting at the same time as the Indicator (e.g. after a power cut).
@@ -99,6 +98,18 @@ esphome:
           text:
             format: "%d s"
             args: ['id(result_sec_setting)']
+      # Same for the screen timeout (an index into the presets in screen_sleep).
+      - lambda: |-
+          if (id(screen_timeout_idx) < 0) id(screen_timeout_idx) = 0;
+          if (id(screen_timeout_idx) > 6) id(screen_timeout_idx) = 6;
+      - lvgl.slider.update:
+          id: timeout_slider
+          value: !lambda 'return id(screen_timeout_idx);'
+      - lvgl.label.update:
+          id: lbl_timeout_value
+          text: !lambda |-
+            static const char* const names[] = {"15 s", "30 s", "1 min", "2 min", "5 min", "10 min", "Never"};
+            return std::string(names[id(screen_timeout_idx)]);
 
 # ESP32-S3 with octal PSRAM. The display will NOT initialize without PSRAM
 # configured correctly - this is the usual cause of a black/backlight-off screen.
@@ -281,7 +292,7 @@ mqtt:
             // Pi's LWT. Only the live message on ${ready_topic} does.
         - script.execute: refresh_screen
         # Wake the screen when the Pi drops offline so the "offline" notice is
-        # actually seen; it goes back to sleep after screen_timeout. Not during
+        # actually seen; it goes back to sleep after the screen timeout. Not during
         # startup, where "offline" is just the Pi's stale retained LWT.
         - if:
             condition:
@@ -341,6 +352,12 @@ globals:
     type: int
     restore_value: yes
     initial_value: "5"
+  # Screen timeout, as an index into the presets in screen_sleep:
+  # 0=15 s  1=30 s  2=1 min  3=2 min  4=5 min  5=10 min  6=Never. Kept in flash.
+  - id: screen_timeout_idx
+    type: int
+    restore_value: yes
+    initial_value: "2"
 
 text_sensor:
   - platform: template
@@ -766,9 +783,12 @@ lvgl:
                   text_font: montserrat_20
 
     # --- Settings page ------------------------------------------------------
-    # One setting: how long a result screen stays up. The Undo button is offered
-    # for the same span, so this is also the undo window. The value is published
-    # on RELEASE (not while dragging) so the broker isn't flooded.
+    # Two settings:
+    #  - Result screen time: how long a result screen stays up. The Undo button
+    #    is offered for the same span, so this is also the undo window. The value
+    #    is published on RELEASE (not while dragging) so the broker isn't flooded.
+    #  - Screen timeout: how long the backlight stays on with nothing happening.
+    #    Local to the Indicator; nothing is published.
     - id: settings_page
       bg_color: ${color_bg}
       bg_opa: COVER
@@ -799,20 +819,20 @@ lvgl:
         - label:
             text: "Settings"
             align: TOP_MID
-            y: 104
+            y: 88
             text_color: ${color_text}
             text_font: font_bold_28
         - label:
             text: "Result screen time"
             align: TOP_MID
-            y: 172
+            y: 140
             text_color: ${color_text_dim}
             text_font: montserrat_20
         - label:
             id: lbl_setting_value
             text: "5 s"
             align: TOP_MID
-            y: 208
+            y: 168
             text_color: ${color_text}
             text_font: montserrat_28
         # 2-10 s in 1 s steps, matching the Basil app's Auto-Reset Delay slider.
@@ -820,7 +840,7 @@ lvgl:
         - slider:
             id: settings_slider
             align: TOP_MID
-            y: 276
+            y: 212
             width: 360
             height: 24
             min_value: 2
@@ -846,10 +866,55 @@ lvgl:
                     topic: ${result_sec_topic}
                     payload: !lambda 'return std::to_string(id(result_sec_setting));'
                     retain: true
+        - label:
+            text: "Screen timeout"
+            align: TOP_MID
+            y: 260
+            text_color: ${color_text_dim}
+            text_font: montserrat_20
+        - label:
+            id: lbl_timeout_value
+            text: "1 min"
+            align: TOP_MID
+            y: 288
+            text_color: ${color_text}
+            text_font: montserrat_28
+        # Seven presets (15 s, 30 s, 1 min, 2 min, 5 min, 10 min, Never); the
+        # slider value is the index. Same table as screen_sleep and on_boot.
+        - slider:
+            id: timeout_slider
+            align: TOP_MID
+            y: 332
+            width: 360
+            height: 24
+            min_value: 0
+            max_value: 6
+            value: 2
+            indicator:
+              bg_color: ${color_success}
+            knob:
+              bg_color: ${color_text}
+              pad_all: 10
+            on_value:
+              then:
+                - lvgl.label.update:
+                    id: lbl_timeout_value
+                    text: !lambda |-
+                      static const char* const names[] = {"15 s", "30 s", "1 min", "2 min", "5 min", "10 min", "Never"};
+                      int i = (int) x;
+                      if (i < 0) i = 0;
+                      if (i > 6) i = 6;
+                      return std::string(names[i]);
+                - script.execute: settings_autoclose
+            on_release:
+              then:
+                - lambda: 'id(screen_timeout_idx) = (int) x;'
+                # Restart the countdown so the new timeout applies right away.
+                - script.execute: screen_sleep
         - button:
             id: btn_settings_done
             align: BOTTOM_MID
-            y: -48
+            y: -28
             width: 200
             height: 56
             radius: 28
@@ -1061,20 +1126,31 @@ script:
   # boot) calls this, and mode: restart means each one resets the countdown.
   # The guard keeps a stale timer from blanking a result that is still on
   # screen; the "idle" message that follows a result restarts the countdown.
+  # With the timeout set to Never (index 6) it does nothing, so the backlight
+  # stays on; restarting it still cancels any countdown already running.
   - id: screen_sleep
     mode: restart
     then:
-      - delay: ${screen_timeout}
       - if:
           condition:
-            lambda: |-
-              std::string s = id(scan_status).state;
-              bool active = id(pi_online) && id(broker_up) &&
-                  (s == "scanning" || s == "success" || s == "error");
-              // Stay lit while starting up so it's clear the unit is alive.
-              return !active && !id(starting_up);
+            lambda: 'return id(screen_timeout_idx) < 6;'
           then:
-            - light.turn_off: backlight
+            - delay: !lambda |-
+                static const uint32_t secs[] = {15, 30, 60, 120, 300, 600};
+                int i = id(screen_timeout_idx);
+                if (i < 0) i = 0;
+                if (i > 5) i = 5;
+                return secs[i] * 1000;
+            - if:
+                condition:
+                  lambda: |-
+                    std::string s = id(scan_status).state;
+                    bool active = id(pi_online) && id(broker_up) &&
+                        (s == "scanning" || s == "success" || s == "error");
+                    // Stay lit while starting up so it's clear the unit is alive.
+                    return !active && !id(starting_up);
+                then:
+                  - light.turn_off: backlight
 
   # Hide the Undo button when the result's countdown ends. mode: restart so a
   # newer scan's countdown replaces an older one.
@@ -1100,7 +1176,7 @@ script:
             - light.turn_on: backlight
             - script.execute: screen_sleep
 
-  # Leave the Settings page after 30 s without touching the slider.
+  # Leave the Settings page after 30 s without touching a slider.
   - id: settings_autoclose
     mode: restart
     then:
