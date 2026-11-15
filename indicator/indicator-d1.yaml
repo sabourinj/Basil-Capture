@@ -25,7 +25,7 @@
 # flash; the result time is also published retained so the Pi follows it. After a
 # successful scan the same slot shows an undo arrow for as long as that result is
 # up; tapping it sends the scan's transaction id to the Pi, which asks Grocy to
-# undo it. A cart button sits to its left (with a wide gap so it isn't hit by
+# undo it. A cart button sits to its left (with a gap so it isn't hit by
 # mistake) for the same span; tapping it sends the product id to the Pi, which
 # adds the product to the Grocy shopping list.
 #
@@ -559,14 +559,15 @@ lvgl:
                               text_color: ${color_text}
                               text_font: font_icons
                     # Add to shopping list. Shown alongside Undo after a
-                    # success. It sits a full 48 px gap to the left of Undo
-                    # (undo spans x 412-468, this one 308-364) so a thumb
-                    # aimed at one doesn't land on the other.
+                    # success. The gap to Undo is 24 px, double Undo's 12 px
+                    # margin from the screen edge (undo spans x 412-468, this
+                    # one 332-388), so a thumb aimed at one doesn't land on the
+                    # other.
                     - button:
                         id: btn_list
                         hidden: true
                         align: RIGHT_MID
-                        x: -116
+                        x: -92
                         width: 56
                         height: 56
                         radius: 28
