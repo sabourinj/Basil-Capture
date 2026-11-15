@@ -17,6 +17,14 @@ against a live 4.6.0 instance, so these two points still need a real test):
   If they don't, consume_by_barcode returns None for it and the Indicator never
   shows an Undo button (it fails closed rather than offering a dead button).
 
+Added for the "add to shopping list" button:
+  POST /stock/shoppinglist/add-product
+    body: {"product_id": <int>, "list_id": <int>, "product_amount": <num>}
+    204 -> added (if the product is already on the list Grocy bumps its amount)
+  The product id comes from the same GET by-barcode call that supplies the name
+  (`product.id`). If that lookup fails there is no id, and the Indicator never
+  shows the button.
+
 Thread safety: the undo runs on an MQTT worker thread while the main loop may be
 consuming, and requests.Session isn't documented as thread-safe, so every HTTP
 call goes through one lock.
@@ -56,11 +64,13 @@ class GrocyClient:
     def consume_by_barcode(self, barcode, amount=1, spoiled=False):
         """Consume stock by barcode.
 
-        Returns (product_name, consumed_amount, remaining, transaction_id) on
-        success, where `remaining` is the stock left AFTER this consume, or None
-        if the stock lookup failed. None and 0 mean different things - see
-        _product_details. `transaction_id` is a string, or None if Grocy's
-        response didn't include one (no undo is offered in that case).
+        Returns (product_name, consumed_amount, remaining, transaction_id,
+        product_id) on success, where `remaining` is the stock left AFTER this
+        consume, or None if the stock lookup failed. None and 0 mean different
+        things - see _product_details. `transaction_id` is a string, or None if
+        Grocy's response didn't include one (no undo is offered in that case).
+        `product_id` is a string, or None if the lookup failed (no "add to
+        shopping list" is offered in that case).
 
         Raises GrocyError on failure.
         """
@@ -89,8 +99,8 @@ class GrocyClient:
             if transaction_id is None:
                 print("  warning: consume response had no transaction_id; "
                       "no undo will be offered for this scan", file=sys.stderr)
-            name, remaining = self._product_details(barcode)
-            return name, consumed, remaining, transaction_id
+            name, remaining, product_id = self._product_details(barcode)
+            return name, consumed, remaining, transaction_id, product_id
 
         if r.status_code == 400:
             msg = self._err(r)
@@ -125,6 +135,35 @@ class GrocyClient:
         raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}",
                          server_side=True)
 
+    def add_to_shopping_list(self, product_id, list_id=1, amount=1):
+        """POST /stock/shoppinglist/add-product - put a product on a list.
+
+        Raises GrocyError on failure (unknown product or list, network).
+        """
+        url = f"{self.base_url}/stock/shoppinglist/add-product"
+        payload = {
+            "product_id": int(product_id),
+            "list_id": int(list_id),
+            "product_amount": amount,
+        }
+        try:
+            with self._lock:
+                r = self.session.post(url, json=payload, timeout=self.timeout)
+        except requests.Timeout:
+            raise GrocyError("Timeout", "Server timeout", server_side=True)
+        except requests.RequestException as e:
+            raise GrocyError(f"Network error: {e}", "Network error", server_side=True)
+
+        if r.status_code in (200, 204):
+            return
+
+        if r.status_code == 400:
+            msg = self._err(r)
+            raise GrocyError(msg, msg[:40])
+
+        raise GrocyError(f"HTTP {r.status_code}", f"Error {r.status_code}",
+                         server_side=True)
+
     @staticmethod
     def _transaction_id(bookings):
         """First transaction_id found in the booking objects, as a string."""
@@ -135,12 +174,13 @@ class GrocyClient:
         return None
 
     def _product_details(self, barcode):
-        """GET /stock/products/by-barcode/{barcode} -> (product.name, stock_amount)
+        """GET /stock/products/by-barcode/{barcode}
+        -> (product.name, stock_amount, product.id)
 
         Called AFTER the consume POST, so stock_amount is what's left rather
         than what was there before.
 
-        Falls back to (barcode, None) on any failure. None is deliberately
+        Falls back to (barcode, None, None) on any failure. None is deliberately
         distinct from 0: 0 means "you just took the last one", None means "we
         couldn't find out", and the display shows nothing at all for None
         rather than claiming the shelf is empty.
@@ -151,11 +191,14 @@ class GrocyClient:
                 r = self.session.get(url, timeout=self.timeout)
             if r.status_code == 200:
                 data = r.json()
-                name = data.get("product", {}).get("name", barcode)
-                return name, self._to_number(data.get("stock_amount"))
-        except requests.RequestException:
+                product = data.get("product") or {}
+                name = product.get("name", barcode)
+                pid = product.get("id")
+                return (name, self._to_number(data.get("stock_amount")),
+                        str(pid) if pid is not None else None)
+        except (requests.RequestException, ValueError):
             pass
-        return barcode, None
+        return barcode, None, None
 
     @staticmethod
     def _to_number(raw):

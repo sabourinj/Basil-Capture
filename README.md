@@ -162,6 +162,7 @@ play a distinct tone for each outcome right at the scanner:
 | Grocy unreachable / timed out | fast warble |
 | Not a product code (URL QR etc.) | 3 short high |
 | Undo succeeded / failed | high→low / 3 short high |
+| Added to shopping list / failed | low→high / 3 short high |
 
 1. Scan the **"SSI over USB CDC"** barcode in your scanner's Product
    Reference Guide (USB Interface → USB Device Type). The scanner
