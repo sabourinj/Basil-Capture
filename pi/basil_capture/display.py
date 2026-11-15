@@ -1,18 +1,21 @@
 """Publishes scanner status to MQTT for the SenseCAP Indicator to display, and
-listens for the two things the Indicator sends back.
+listens for the things the Indicator sends back.
 
 The Indicator D1 is a standalone Wi-Fi device that SUBSCRIBES to the status
 topic; it is not attached to the Pi. Status goes out on `status_topic`, and the
-Indicator talks back over the same broker on two topics:
+Indicator talks back over the same broker on these topics:
 
   undo_topic        plain-text transaction id of the scan to undo. Sent when
                     the Undo button is tapped.
+  list_topic        plain-text Grocy product id of the scan to add to the
+                    shopping list. Sent when the cart button is tapped. Offered
+                    for the same window as Undo.
   result_sec_topic  retained integer: how long a result screen stays up. Set by
                     the slider on the Indicator's Settings page. The Undo
                     button is offered for exactly this long, so one setting
                     covers both.
 
-Both topics have defaults (see __init__), so config.yaml needs no new keys.
+All topics have defaults (see __init__), so config.yaml needs no new keys.
 
 Messages are retained so the Indicator shows the current state immediately on
 (re)connect, and a Last-Will (LWT) marks the Pi offline if the service dies.
@@ -57,6 +60,7 @@ class Display:
         self.topic = cfg["status_topic"]
         self.avail = cfg["availability_topic"]
         self.undo_topic = cfg.get("undo_topic", "basil/capture/undo")
+        self.list_topic = cfg.get("list_topic", "basil/capture/shopping_list")
         self.setting_topic = cfg.get("result_sec_topic",
                                      "basil/capture/settings/result_sec")
         # Live "I'm ready" signal: NOT retained, so receiving it proves the Pi
@@ -87,10 +91,14 @@ class Display:
         # (transaction_id, product, expires_monotonic) for the one scan that can
         # currently be undone, or None.
         self._undo = None
+        # (product_id, product, expires_monotonic) for the one scan that can
+        # currently be added to the shopping list, or None. Same window as undo.
+        self._list_offer = None
         # While a timed result that main.py doesn't know about ("Undone") is
         # up, show_idle() is a no-op until this passes; the timer below ends it.
         self._hold_until = 0.0
         self._undo_handler = None
+        self._list_handler = None
 
         self.client = mqtt.Client(
             client_id=cfg.get("client_id", "basil-capture-pi"),
@@ -119,6 +127,14 @@ class Display:
         """
         self._undo_handler = handler
 
+    def set_list_handler(self, handler):
+        """handler(product_id) adds the product to the Grocy shopping list.
+
+        Same contract as set_undo_handler: raise on failure, ideally with a
+        `user_message`.
+        """
+        self._list_handler = handler
+
     # ------------------------------------------------------------------ MQTT
 
     def _on_connect(self, client, userdata, flags, rc):
@@ -138,7 +154,8 @@ class Display:
         mark_ready). Connecting to the broker alone doesn't mean scans work.
         """
         if rc == 0:
-            client.subscribe([(self.undo_topic, 1), (self.setting_topic, 1),
+            client.subscribe([(self.undo_topic, 1), (self.list_topic, 1),
+                              (self.setting_topic, 1),
                               (self.indicator_avail, 1)])
             if self._ready:
                 self._announce_ready()
@@ -175,6 +192,13 @@ class Display:
                 return
             threading.Thread(target=self._handle_undo, args=(payload,),
                              daemon=True).start()
+        elif msg.topic == self.list_topic:
+            # Same reasoning as undo: an action, so never replay a retained one.
+            if msg.retain:
+                print("Ignoring retained shopping-list message")
+                return
+            threading.Thread(target=self._handle_list, args=(payload,),
+                             daemon=True).start()
 
     def _apply_setting(self, payload):
         try:
@@ -186,8 +210,9 @@ class Display:
         self.result_sec = sec
         print(f"Result screen time is now {sec:g}s (undo window matches)")
 
-    def _publish(self, status, title, body, badge="", timeout_ms=0, undo_id=""):
-        # "badge", "timeout_ms" and "undo_id" are always present, even when
+    def _publish(self, status, title, body, badge="", timeout_ms=0, undo_id="",
+                 list_id=""):
+        # "badge", "timeout_ms", "undo_id" and "list_id" are always present, even when
         # empty/zero. The Indicator reads them with defaulting accessors anyway,
         # but emitting them unconditionally keeps retained messages from older
         # builds from being the only shape the firmware ever has to cope with.
@@ -197,7 +222,8 @@ class Display:
         #
         # undo_id is a STRING ("" when nothing can be undone): Grocy's
         # transaction ids are strings, and the firmware's `| ""` accessor only
-        # returns string fields.
+        # returns string fields. list_id (the Grocy product id the cart button
+        # sends back, "" to hide the button) is a string for the same reason.
         payload = json.dumps({
             "status": status.value,
             "title": title,
@@ -205,6 +231,7 @@ class Display:
             "badge": badge,
             "timeout_ms": timeout_ms,
             "undo_id": undo_id,
+            "list_id": list_id,
             "ts": int(time.time()),
         })
         self.client.publish(self.topic, payload, qos=1, retain=True)
@@ -214,9 +241,10 @@ class Display:
     # each is atomic with respect to the undo worker thread.
 
     def _supersede(self):
-        """A new scan began: drop any undo offer and any pending "Undone" hold."""
+        """A new scan began: drop any undo/list offer and any pending hold."""
         self._gen += 1
         self._undo = None
+        self._list_offer = None
         self._hold_until = 0.0
 
     def show_idle(self):
@@ -235,18 +263,20 @@ class Display:
             self._supersede()
             self._publish(Status.SCANNING, "Identifying product...", "")
 
-    def show_success(self, product, amount, remaining=None, undo_id=None):
+    def show_success(self, product, amount, remaining=None, undo_id=None,
+                     product_id=None):
         amount = int(amount) if amount == int(amount) else amount
         body = product if amount == 1 else f"{product}\nx {amount}"
         with self._lock:
-            self._undo = None
-            if undo_id:
-                expires = time.monotonic() + self.result_sec + UNDO_GRACE_SEC
-                self._undo = (str(undo_id), product, expires)
+            expires = time.monotonic() + self.result_sec + UNDO_GRACE_SEC
+            self._undo = (str(undo_id), product, expires) if undo_id else None
+            self._list_offer = ((str(product_id), product, expires)
+                                if product_id else None)
             self._publish(Status.SUCCESS, "Consumed", body,
                           badge=self._stock_badge(remaining),
                           timeout_ms=self.result_ms,
-                          undo_id=str(undo_id) if undo_id else "")
+                          undo_id=str(undo_id) if undo_id else "",
+                          list_id=str(product_id) if product_id else "")
 
     @staticmethod
     def _stock_badge(remaining):
@@ -283,8 +313,10 @@ class Display:
                 print(f"Undo ignored (stale or expired): {tid!r}")
                 return
             # Claim it before the slow Grocy call so a second tap can't undo
-            # the same transaction twice.
+            # the same transaction twice. The "Undone" screen replaces the
+            # result, so the shopping-list offer goes with it.
             self._undo = None
+            self._list_offer = None
             product = cur[1]
             gen = self._gen
 
@@ -310,6 +342,44 @@ class Display:
                 self._show_timed_locked(Status.ERROR, "Undo failed", error, gen)
             else:
                 self._show_timed_locked(Status.SUCCESS, "Undone", product, gen)
+
+    # ------------------------------------------------------- shopping list
+
+    def _handle_list(self, product_id):
+        with self._lock:
+            cur = self._list_offer
+            if cur is None or cur[0] != product_id or time.monotonic() > cur[2]:
+                print(f"Add to list ignored (stale or expired): {product_id!r}")
+                return
+            # Claim it so a double tap adds once. The confirmation screen
+            # replaces the result, so the undo offer goes too - undoing a
+            # consume after putting it on the list is the rare case, and the
+            # list entry would be left behind anyway.
+            self._list_offer = None
+            self._undo = None
+            product = cur[1]
+            gen = self._gen
+
+        error = None
+        handler = self._list_handler
+        if handler is None:
+            error = "Shopping list unavailable"
+        else:
+            try:
+                handler(product_id)
+                print(f"Added product {product_id} ({product}) to shopping list")
+            except Exception as e:
+                error = getattr(e, "user_message", None) or "Couldn't add to list"
+                print(f"Add to list failed for {product_id}: {e}")
+
+        with self._lock:
+            if gen != self._gen:
+                return  # a newer scan owns the screen now
+            if error:
+                self._show_timed_locked(Status.ERROR, "Not added", error, gen)
+            else:
+                self._show_timed_locked(Status.SUCCESS, "Added to list",
+                                        product, gen)
 
     def _show_timed_locked(self, status, title, body, gen):
         """Show a result main.py doesn't know about, then return to idle.

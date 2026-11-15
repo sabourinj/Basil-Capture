@@ -25,7 +25,9 @@
 # flash; the result time is also published retained so the Pi follows it. After a
 # successful scan the same slot shows an undo arrow for as long as that result is
 # up; tapping it sends the scan's transaction id to the Pi, which asks Grocy to
-# undo it.
+# undo it. A cart button sits to its left (with a wide gap so it isn't hit by
+# mistake) for the same span; tapping it sends the product id to the Pi, which
+# adds the product to the Grocy shopping list.
 #
 # First flash over USB-C (bottom port); afterwards OTA.
 # =============================================================================
@@ -40,6 +42,7 @@ substitutions:
   # Back-channel topics (Indicator -> Pi). Must match pi/config.yaml -> mqtt;
   # these are also the defaults the Pi uses when the keys are absent.
   undo_topic: basil/capture/undo
+  list_topic: basil/capture/shopping_list
   result_sec_topic: basil/capture/settings/result_sec
   # Pi -> Indicator, NOT retained: "my scanner is open". Ends Starting Up.
   ready_topic: basil/capture/ready
@@ -168,13 +171,13 @@ font:
     glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
   # Material icons for the header buttons, pulled from Google Fonts at compile
   # time (first build downloads the font; ESPHome caches it afterwards). Only
-  # the two glyphs we draw are kept, so it costs almost nothing in flash.
-  #   e8b8 = settings (gear)    e166 = undo
+  # the glyphs we draw are kept, so it costs almost nothing in flash.
+  #   e8b8 = settings (gear)    e166 = undo    e854 = add_shopping_cart
   - file: "gfonts://Material+Symbols+Outlined"
     id: font_icons
     size: 32
     bpp: 4
-    glyphs: ["\U0000e8b8", "\U0000e166"]
+    glyphs: ["\U0000e8b8", "\U0000e166", "\U0000e854"]
 
 ota:
   - platform: esphome
@@ -246,6 +249,11 @@ mqtt:
         - text_sensor.template.publish:
             id: scan_undo_id
             state: !lambda 'return std::string(x["undo_id"] | "");'
+        # Grocy product id for the cart button ("" hides it). String for the
+        # same reason as undo_id.
+        - text_sensor.template.publish:
+            id: scan_list_id
+            state: !lambda 'return std::string(x["list_id"] | "");'
         # How long the Pi will leave this screen up. 0 on screens that don't
         # time out, which is what hides the countdown bar.
         - lambda: 'id(result_ms) = x["timeout_ms"] | 0;'
@@ -265,11 +273,14 @@ mqtt:
               - light.turn_on: backlight
               # A scan result takes over from the Settings page if it's open.
               - lvgl.page.show: main_page
-        # Offer Undo only while the result is up: hide the button when the
-        # countdown ends, even if the Pi's idle message never arrives.
+        # Offer Undo / Add to list only while the result is up: hide the
+        # buttons when the countdown ends, even if the Pi's idle message never
+        # arrives.
         - if:
             condition:
-              lambda: 'return !id(scan_undo_id).state.empty() && id(result_ms) > 0;'
+              lambda: |-
+                return (!id(scan_undo_id).state.empty() ||
+                        !id(scan_list_id).state.empty()) && id(result_ms) > 0;
             then:
               - script.execute: undo_expire
         - script.execute: screen_sleep
@@ -370,6 +381,8 @@ text_sensor:
     id: scan_badge
   - platform: template
     id: scan_undo_id
+  - platform: template
+    id: scan_list_id
 
 # --- Display stack ----------------------------------------------------------
 i2c:
@@ -533,11 +546,47 @@ lvgl:
                             - mqtt.publish:
                                 topic: ${undo_topic}
                                 payload: !lambda 'return id(scan_undo_id).state;'
-                            # Hide at once so a second tap can't send it twice.
-                            - lambda: 'lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);'
+                            # Hide at once so a second tap can't send it
+                            # twice. The cart goes too: the Pi replaces this
+                            # result with "Undone".
+                            - lambda: |-
+                                lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+                                lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
                         widgets:
                           - label:
                               text: "\U0000e166"   # undo
+                              align: CENTER
+                              text_color: ${color_text}
+                              text_font: font_icons
+                    # Add to shopping list. Shown alongside Undo after a
+                    # success. It sits a full 48 px gap to the left of Undo
+                    # (undo spans x 412-468, this one 308-364) so a thumb
+                    # aimed at one doesn't land on the other.
+                    - button:
+                        id: btn_list
+                        hidden: true
+                        align: RIGHT_MID
+                        x: -116
+                        width: 56
+                        height: 56
+                        radius: 28
+                        bg_opa: TRANSP
+                        border_width: 0
+                        shadow_width: 0
+                        on_click:
+                          then:
+                            - mqtt.publish:
+                                topic: ${list_topic}
+                                payload: !lambda 'return id(scan_list_id).state;'
+                            # Hide both at once: a second tap can't add it
+                            # twice, and the Pi replaces this result with
+                            # "Added to list".
+                            - lambda: |-
+                                lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
+                                lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+                        widgets:
+                          - label:
+                              text: "\U0000e854"   # add_shopping_cart
                               align: CENTER
                               text_color: ${color_text}
                               text_font: font_icons
@@ -953,12 +1002,15 @@ script:
 
           // Helper: the top-right slot holds either "Settings" (idle) or "Undo"
           // (a success the Pi can undo) - never both, and nothing while
-          // scanning, on errors, or while the Pi is offline.
-          auto set_header_buttons = [](bool settings, bool undo) {
+          // scanning, on errors, or while the Pi is offline. The cart button
+          // to its left only ever appears on a success, next to Undo.
+          auto set_header_buttons = [](bool settings, bool undo, bool list) {
             if (settings) lv_obj_clear_flag(id(btn_settings), LV_OBJ_FLAG_HIDDEN);
             else          lv_obj_add_flag(id(btn_settings), LV_OBJ_FLAG_HIDDEN);
             if (undo)     lv_obj_clear_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
             else          lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+            if (list)     lv_obj_clear_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
+            else          lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
           };
 
           // Helper: re-assert alignment after every text change. LVGL positions
@@ -1017,7 +1069,7 @@ script:
           if (id(starting_up)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
             set_brackets(false);
-            set_header_buttons(false, false);
+            set_header_buttons(false, false, false);
             lv_label_set_text(id(lbl_title), "Starting Up");
             lv_label_set_text(id(lbl_body), "");
             lv_obj_add_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
@@ -1035,7 +1087,7 @@ script:
           if (!id(broker_up)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
             set_brackets(false);
-            set_header_buttons(false, false);
+            set_header_buttons(false, false, false);
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
@@ -1051,7 +1103,7 @@ script:
           if (!id(pi_online)) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg_dark}), 0);
             set_brackets(false);
-            set_header_buttons(false, false);
+            set_header_buttons(false, false, false);
             lv_label_set_text(id(lbl_title), "Basil Capture");
             lv_label_set_text(id(lbl_body), "offline");
             lv_obj_clear_flag(id(lbl_body), LV_OBJ_FLAG_HIDDEN);
@@ -1072,7 +1124,7 @@ script:
           if (s == "idle" || s.empty()) {
             lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
             set_brackets(true);
-            set_header_buttons(true, false);
+            set_header_buttons(true, false, false);
             lv_label_set_text(id(lbl_title), "Ready to Scan");
             // Hidden, not just emptied: an empty label is still a full line tall
             // in the flex column, which would push the title off-center.
@@ -1097,7 +1149,9 @@ script:
                    s.c_str(), title.c_str(), badge.c_str());
           lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
           set_brackets(false);
-          set_header_buttons(false, s == "success" && !id(scan_undo_id).state.empty());
+          set_header_buttons(false,
+                             s == "success" && !id(scan_undo_id).state.empty(),
+                             s == "success" && !id(scan_list_id).state.empty());
           // Every optional row is hidden when empty rather than just blanked.
           // An empty label still occupies a full line in a flex column, which
           // would push the title off-center - "scanning" sends no body at all,
@@ -1152,13 +1206,15 @@ script:
                 then:
                   - light.turn_off: backlight
 
-  # Hide the Undo button when the result's countdown ends. mode: restart so a
-  # newer scan's countdown replaces an older one.
+  # Hide the Undo and cart buttons when the result's countdown ends.
+  # mode: restart so a newer scan's countdown replaces an older one.
   - id: undo_expire
     mode: restart
     then:
       - delay: !lambda 'return id(result_ms);'
-      - lambda: 'lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);'
+      - lambda: |-
+          lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
 
   # Give the Pi `startup_grace` to check in after we connect. If it hasn't by
   # then, drop out of Starting Up so the real offline screen shows.

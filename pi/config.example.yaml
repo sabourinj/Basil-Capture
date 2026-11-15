@@ -13,6 +13,12 @@ grocy:
   # what you want on a dedicated bin-side scanner.
   spoil_on_consume: false
 
+  # The Indicator's cart button (shown next to Undo after a scan) adds the
+  # product to this Grocy shopping list. 1 is Grocy's default list; see
+  # Grocy > Shopping list for the ids of any others. Both keys are optional.
+  shopping_list_id: 1
+  shopping_list_amount: 1
+
 scanner:
   # How the scanner talks to the Pi:
   #   hid  USB HID Keyboard mode (the scanner's factory default). One-way: the
@@ -42,6 +48,8 @@ scanner:
     rejected: 3_short_high     # not a product code (e.g. a URL QR code)
     undo: high_low             # undo succeeded
     undo_error: 3_short_high   # undo failed
+    list: low_high             # added to the shopping list
+    list_error: 3_short_high   # couldn't add to the shopping list
 
 mqtt:
   host: "192.168.1.x"          # HA / broker LAN IP (NOT the public hostname)

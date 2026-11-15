@@ -3,9 +3,11 @@
 
 Reads scans from a USB HID barcode scanner, consumes the matching product in
 Grocy, and publishes a status message over MQTT that the SenseCAP Indicator D1
-subscribes to and displays. The Indicator can send two things back: a tap on its
-Undo button (reverts the last scan in Grocy) and a new result-screen time from
-its Settings slider. Both are handled inside Display; see display.py.
+subscribes to and displays. The Indicator can send three things back: a tap on
+its Undo button (reverts the last scan in Grocy), a tap on its Add-to-list button
+(puts the last scanned product on the Grocy shopping list) and a new
+result-screen time from its Settings slider. All are handled inside Display; see
+display.py.
 """
 import argparse
 import sys
@@ -74,6 +76,21 @@ def main():
 
     display.set_undo_handler(undo)
 
+    def add_to_list(product_id):
+        # Same threading story as undo() above.
+        try:
+            grocy.add_to_shopping_list(
+                product_id,
+                list_id=g.get("shopping_list_id", 1),
+                amount=g.get("shopping_list_amount", 1),
+            )
+        except Exception:
+            reader.beep("list_error")
+            raise
+        reader.beep("list")
+
+    display.set_list_handler(add_to_list)
+
     reader.grab()
     reader.beep("ready")
     display.show_idle()
@@ -109,7 +126,8 @@ def main():
                 # the whole time, so a scan looks like it did nothing.
                 display.show_scanning(barcode)
                 try:
-                    product, consumed, remaining, undo_id = grocy.consume_by_barcode(
+                    (product, consumed, remaining, undo_id,
+                     product_id) = grocy.consume_by_barcode(
                         barcode,
                         amount=g["consume_amount"],
                         spoiled=g.get("spoil_on_consume", False),
@@ -117,7 +135,8 @@ def main():
                     print(f"  consumed {consumed} x {product} ({remaining} remaining)"
                           f" [transaction {undo_id}]")
                     display.show_success(product, consumed, remaining,
-                                         undo_id=undo_id)
+                                         undo_id=undo_id,
+                                         product_id=product_id)
                     reader.beep("success")
                 except GrocyError as e:
                     print(f"  error: {e}", file=sys.stderr)

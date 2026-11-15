@@ -86,6 +86,8 @@ DEFAULT_BEEPS = {
     "rejected": "3_short_high",     # not a product code (e.g. a URL QR)
     "undo": "high_low",             # undo succeeded
     "undo_error": "3_short_high",   # undo failed
+    "list": "low_high",             # added to the shopping list
+    "list_error": "3_short_high",   # couldn't add to the shopping list
 }
 
 
