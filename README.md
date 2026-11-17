@@ -51,6 +51,9 @@ pi/                     Raspberry Pi capture service (Python)
 indicator/
   indicator-d1.yaml     ESPHome firmware for the SenseCAP Indicator D1
   secrets.example.yaml  wifi + mqtt secrets template
+reterminal/
+  reterminal-d1001.yaml ESPHome firmware for the 8" reTerminal D1001
+  secrets.example.yaml  same secrets as the Indicator
 tools/
   test_publish.py       fake status publisher to test the screen alone
   test_beep.py          plays SSI beep tones on the scanner
@@ -63,7 +66,8 @@ tools/
 | `basil/capture/status` | `{"status","title","body","badge","timeout_ms","ts"}` | retained |
 | `basil/capture/availability` | `online` / `offline` | Pi LWT, retained |
 | `basil/capture/indicator/availability` | `online` / `offline` | Indicator LWT |
-| `basil/capture/ready` | `ready` | Pi, NOT retained: scanner is open. Sent at startup and whenever the Indicator connects; ends the Indicator's Starting Up screen |
+| `basil/capture/reterminal/availability` | `online` / `offline` | reTerminal D1001 LWT |
+| `basil/capture/ready` | `ready` | Pi, NOT retained: scanner is open. Sent at startup and whenever a display connects; ends the Indicator's Starting Up screen |
 
 `status` is one of `idle`, `scanning`, `success`, `error`.
 
@@ -146,6 +150,37 @@ journalctl -u basil-capture -f     # watch logs
    with real Wi-Fi + MQTT values (same broker/creds as the Pi).
 3. **First flash over USB-C** (the port on the *bottom* of the unit). After
    that, updates go over the air.
+
+### 3b. Optional: reTerminal D1001 (8" display)
+
+`reterminal/reterminal-d1001.yaml` is the same status display at 8", for a
+station where the Indicator is too small. It speaks the same MQTT protocol, so
+it can run next to the Indicator or replace it, and the Pi needs no config
+change: it answers both displays' birth messages by default
+(`display_availability_topics` in `config.example.yaml`).
+
+1. Use ESPHome 2026.10 or newer (ESP32-P4, the `mipi_dsi` D1001 preset and the
+   `gsl3670` touch driver).
+2. Add `reterminal/reterminal-d1001.yaml` with the same `secrets.yaml` values as
+   the Indicator. If you copy it into the ESPHome dashboard's config folder,
+   copy `basil_logo.png` next to it.
+3. Pick the orientation with the `rotation` substitution: `"0"` is portrait
+   (the panel's native orientation), `"90"` or `"270"` is landscape on the
+   included stand. The layout adapts to either.
+4. First flash over USB-C; afterwards OTA.
+
+Two hardware values come from community configs rather than Seeed's docs and
+are marked UNVERIFIED in the YAML: `engineering_sample: true` (try `false` if
+the build or boot fails) and the IO-expander pins that power the LCD (check
+these if the backlight comes on but the panel stays black). If taps land in the
+wrong place after changing `rotation`, add a `transform:` to `touchscreen:`.
+
+With two displays, the result-time slider on either one sets it for both: the
+reTerminal follows the retained `settings/result_sec` value. The Indicator
+pushes its own stored value when the Pi comes online, so after a Pi restart the
+Indicator's setting wins.
+
+The D1001's camera is not used: ESPHome has no driver for it yet.
 
 ### 4. Optional: error beeps on the scanner (Zebra/Symbol SSI mode)
 

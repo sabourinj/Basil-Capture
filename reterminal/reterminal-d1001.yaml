@@ -1,0 +1,1023 @@
+# =============================================================================
+# Basil Capture - reTerminal D1001 Status Display (ESPHome)
+# =============================================================================
+# An 8" (800x1280) second display for Basil Capture. It speaks exactly the same
+# MQTT protocol as the SenseCAP Indicator (indicator/indicator-d1.yaml), so it
+# can run alongside the Indicator or replace it. Screens, colors, Undo, the
+# shopping-list button, the countdown bar and the Settings page all behave the
+# same; only the layout is scaled up.
+#
+# Differences from the Indicator build:
+#   - Its birth/LWT topic is basil/capture/reterminal/availability. The Pi
+#     answers any display's birth message with a fresh "ready" (see
+#     display_availability_topics in pi/config.example.yaml).
+#   - It FOLLOWS the retained result_sec setting instead of pushing its own
+#     whenever the Pi comes online, so two displays never fight over it. Moving
+#     the slider here still publishes the new value, and the Indicator's slider
+#     simply isn't updated until its next reboot.
+#   - The layout uses alignment rather than fixed coordinates, so it works in
+#     portrait (rotation 0, the panel's native orientation) and landscape
+#     (rotation 90/270, which is how the included stand holds it).
+#
+# Hardware config comes from the ESPHome display/touch presets for this board
+# and the community thread "Home Assistant with Seeed D1001". Two values there
+# are marked UNVERIFIED below; check them first if the screen stays dark.
+#
+# Needs a recent ESPHome (2026.10+): ESP32-P4, esp32_hosted, the mipi_dsi
+# SEEED-RETERMINAL-D1001 preset and the gsl3670 touch driver.
+#
+# First flash over USB-C; afterwards OTA.
+# =============================================================================
+
+substitutions:
+  name: basil-capture-reterminal
+  friendly_name: Basil Capture reTerminal
+  # 0 = portrait (native). 90 or 270 = landscape on the included stand.
+  # If taps land in the wrong place after changing this, see touchscreen:.
+  rotation: "0"
+  startup_grace: 90s
+  # Must match pi/config.yaml -> mqtt (these are also the Pi's defaults).
+  status_topic: basil/capture/status
+  pi_availability_topic: basil/capture/availability
+  self_availability_topic: basil/capture/reterminal/availability
+  undo_topic: basil/capture/undo
+  list_topic: basil/capture/shopping_list
+  result_sec_topic: basil/capture/settings/result_sec
+  ready_topic: basil/capture/ready
+  # --- Basil brand palette (same as the Indicator) ---
+  color_bg: "0x5A3A4E"
+  color_bg_dark: "0x3A2130"
+  color_success: "0x6FB06B"
+  color_error: "0xC0392B"
+  color_scanning: "0x8E6C88"
+  color_bracket: "0xC9B8C4"
+  color_text: "0xFFFFFF"
+  color_text_dim: "0xC9B8C4"
+  color_badge_text: "0x3A2130"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.10.0
+  name_add_mac_suffix: false
+  on_boot:
+    priority: -100
+    then:
+      - delay: 500ms
+      - lambda: 'ESP_LOGI("basil", "Booted - waiting for first status message");'
+      - script.execute: refresh_screen
+      - script.execute: screen_sleep
+      - script.execute: startup_timeout
+      # Ask a Pi that's already up for a fresh "ready" now that we're
+      # subscribed (the birth message can go out before the subscription).
+      - mqtt.publish:
+          topic: ${self_availability_topic}
+          payload: online
+          retain: true
+      - lambda: |-
+          if (id(result_sec_setting) < 2)  id(result_sec_setting) = 2;
+          if (id(result_sec_setting) > 10) id(result_sec_setting) = 10;
+          if (id(screen_timeout_idx) < 0) id(screen_timeout_idx) = 0;
+          if (id(screen_timeout_idx) > 6) id(screen_timeout_idx) = 6;
+      - script.execute: sync_settings_widgets
+
+# --- ESP32-P4 -----------------------------------------------------------------
+esp32:
+  variant: esp32p4
+  flash_size: 32MB
+  cpu_frequency: 360MHz
+  # UNVERIFIED for production units: the community configs set this because
+  # early D1001s ship with pre-v3 P4 silicon. If the build or boot fails, try
+  # false.
+  engineering_sample: true
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
+      execute_from_psram: false
+    sdkconfig_options:
+      CONFIG_ESP32P4_CACHE_L2_CACHE_SIZE_512KB: "y"
+
+psram:
+  speed: 200MHz
+
+# Powers the MIPI-DSI PHY.
+esp_ldo:
+  - channel: 3
+    voltage: 2.5V
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+# Wi-Fi comes from the onboard ESP32-C6 over SDIO.
+esp32_hosted:
+  variant: ESP32C6
+  active_high: true
+  clk_pin: GPIO11
+  cmd_pin: GPIO6
+  d0_pin: GPIO7
+  d1_pin: GPIO8
+  d2_pin: GPIO9
+  d3_pin: GPIO10
+  reset_pin: GPIO13
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Setup"
+
+captive_portal:
+
+ota:
+  - platform: esphome
+
+# --- Buses and IO expander ----------------------------------------------------
+i2c:
+  - id: lcd_i2c
+    sda:
+      number: GPIO37
+      ignore_strapping_warning: true
+    scl:
+      number: GPIO38
+      ignore_strapping_warning: true
+    frequency: 400kHz
+    scan: false
+  - id: misc_i2c
+    sda: GPIO20
+    scl: GPIO21
+    frequency: 400kHz
+    scan: false
+
+xl9535:
+  - id: expander
+    i2c_id: misc_i2c
+    address: 0x20
+
+# Expander lines that must be held on. internal: true keeps them out of MQTT
+# discovery.
+switch:
+  # UNVERIFIED pin numbers (from one community post): LCD power enables. If
+  # the backlight comes on but the panel stays black, these are the suspects.
+  - platform: gpio
+    id: lcd_power_en
+    internal: true
+    pin:
+      xl9535: expander
+      number: 0
+    restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: lcd_power_en2
+    internal: true
+    pin:
+      xl9535: expander
+      number: 7
+    restore_mode: ALWAYS_ON
+  # Keeps the unit powered when it runs from its battery.
+  - platform: gpio
+    id: power_hold
+    internal: true
+    pin:
+      xl9535: expander
+      number: 10
+    restore_mode: ALWAYS_ON
+
+# --- Display, backlight, touch ------------------------------------------------
+display:
+  - platform: mipi_dsi
+    model: SEEED-RETERMINAL-D1001
+    id: d1001_display
+    update_interval: never
+    auto_clear_enabled: false
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO14
+    frequency: 1220Hz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    output: backlight_output
+    default_transition_length: 0s
+    gamma_correct: 1.0
+    restore_mode: ALWAYS_ON
+
+# The preset sets pins and calibration. If taps land mirrored or rotated after
+# changing ${rotation}, add a transform: here (swap_xy / mirror_x / mirror_y).
+touchscreen:
+  - platform: gsl3670
+    id: d1001_touchscreen
+    i2c_id: lcd_i2c
+    model: SEEED-RETERMINAL-D1001
+    on_release:
+      then:
+        - light.turn_on: backlight
+        - script.execute: screen_sleep
+
+# BOOT button on the back: wakes the screen like the Indicator's top button.
+binary_sensor:
+  - platform: gpio
+    id: wake_button
+    internal: true
+    pin:
+      number: GPIO35
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      then:
+        - light.turn_on: backlight
+        - script.execute: screen_sleep
+
+# --- Assets -------------------------------------------------------------------
+image:
+  - platform: file
+    file: ../indicator/basil_logo.png
+    id: basil_leaf
+    resize: 104x80
+    type: RGB565
+    transparency: alpha_channel
+
+# Regular text uses LVGL's built-in montserrat_32/36/48. Bold and icons come
+# from Google Fonts at compile time.
+font:
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_bold_64
+    size: 64
+    bpp: 4
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+  - file:
+      type: gfonts
+      family: Montserrat
+      weight: 700
+    id: font_bold_48
+    size: 48
+    bpp: 4
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+  #   e8b8 = settings    e166 = undo    e854 = add_shopping_cart
+  - file: "gfonts://Material+Symbols+Outlined"
+    id: font_icons
+    size: 56
+    bpp: 4
+    glyphs: ["\U0000e8b8", "\U0000e166", "\U0000e854"]
+
+# --- MQTT ---------------------------------------------------------------------
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  birth_message:
+    topic: ${self_availability_topic}
+    payload: online
+  will_message:
+    topic: ${self_availability_topic}
+    payload: offline
+
+  on_connect:
+    - lambda: |-
+        if (!id(broker_up)) ESP_LOGI("basil", "MQTT broker connected");
+        id(broker_up) = true;
+    - script.execute: refresh_screen
+  on_disconnect:
+    - lambda: |-
+        if (id(broker_up)) ESP_LOGW("basil", "MQTT broker disconnected");
+        id(broker_up) = false;
+    - script.execute: refresh_screen
+    - if:
+        condition:
+          lambda: 'return !id(starting_up);'
+        then:
+          - light.turn_on: backlight
+          - script.execute: screen_sleep
+
+  on_json_message:
+    - topic: ${status_topic}
+      then:
+        - text_sensor.template.publish:
+            id: scan_status
+            state: !lambda 'return std::string(x["status"] | "");'
+        - text_sensor.template.publish:
+            id: scan_title
+            state: !lambda 'return std::string(x["title"] | "");'
+        - text_sensor.template.publish:
+            id: scan_body
+            state: !lambda 'return std::string(x["body"] | "");'
+        - text_sensor.template.publish:
+            id: scan_badge
+            state: !lambda 'return std::string(x["badge"] | "");'
+        - text_sensor.template.publish:
+            id: scan_undo_id
+            state: !lambda 'return std::string(x["undo_id"] | "");'
+        - text_sensor.template.publish:
+            id: scan_list_id
+            state: !lambda 'return std::string(x["list_id"] | "");'
+        - lambda: 'id(result_ms) = x["timeout_ms"] | 0;'
+        - lambda: |-
+            ESP_LOGI("basil", "MQTT status: %s | title='%s' body='%s' badge='%s' timeout=%dms",
+                     id(scan_status).state.c_str(), id(scan_title).state.c_str(),
+                     id(scan_body).state.c_str(), id(scan_badge).state.c_str(),
+                     id(result_ms));
+        - script.execute: refresh_screen
+        - if:
+            condition:
+              lambda: 'return id(scan_status).state != "idle" && !id(scan_status).state.empty();'
+            then:
+              - light.turn_on: backlight
+              - lvgl.page.show: main_page
+        - if:
+            condition:
+              lambda: |-
+                return (!id(scan_undo_id).state.empty() ||
+                        !id(scan_list_id).state.empty()) && id(result_ms) > 0;
+            then:
+              - script.execute: undo_expire
+        - script.execute: screen_sleep
+
+  on_message:
+    - topic: ${pi_availability_topic}
+      then:
+        - lambda: |-
+            bool now_online = (x == "online");
+            if (now_online != id(pi_online)) {
+              ESP_LOGI("basil", "Pi availability: %s -> %s",
+                       id(pi_online) ? "online" : "offline",
+                       now_online ? "online" : "offline");
+            }
+            id(pi_online) = now_online;
+        - script.execute: refresh_screen
+        - if:
+            condition:
+              lambda: 'return !id(pi_online) && !id(starting_up);'
+            then:
+              - light.turn_on: backlight
+        - script.execute: screen_sleep
+
+    - topic: ${ready_topic}
+      then:
+        - lambda: |-
+            if (id(starting_up)) ESP_LOGI("basil", "Pi ready - startup complete");
+            id(starting_up) = false;
+            id(pi_online) = true;
+            id(broker_up) = true;
+        - script.execute: refresh_screen
+        - script.execute: screen_sleep
+
+    # Follow the shared result-screen time, whoever set it (this slider, the
+    # Indicator's, or a retained value from before we booted).
+    - topic: ${result_sec_topic}
+      then:
+        - lambda: |-
+            int v = atoi(x.c_str());
+            if (v < 2 || v > 10) return;
+            if (v != id(result_sec_setting)) {
+              ESP_LOGI("basil", "Result screen time follows broker: %d s", v);
+              id(result_sec_setting) = v;
+            }
+        - script.execute: sync_settings_widgets
+
+globals:
+  - id: pi_online
+    type: bool
+    restore_value: no
+    initial_value: "true"
+  - id: starting_up
+    type: bool
+    restore_value: no
+    initial_value: "true"
+  - id: broker_up
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: result_ms
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: result_sec_setting
+    type: int
+    restore_value: yes
+    initial_value: "5"
+  # 0=15 s  1=30 s  2=1 min  3=2 min  4=5 min  5=10 min  6=Never
+  - id: screen_timeout_idx
+    type: int
+    restore_value: yes
+    initial_value: "2"
+
+text_sensor:
+  - platform: template
+    id: scan_status
+  - platform: template
+    id: scan_title
+  - platform: template
+    id: scan_body
+  - platform: template
+    id: scan_badge
+  - platform: template
+    id: scan_undo_id
+  - platform: template
+    id: scan_list_id
+
+# --- LVGL UI ------------------------------------------------------------------
+# Everything is positioned by alignment and percentages, not absolute x/y, so
+# the same layout fits 800x1280 portrait and 1280x800 landscape.
+lvgl:
+  displays:
+    - d1001_display
+  rotation: ${rotation}
+  # Without this the panel shows red/green/blue swapped.
+  byte_order: little_endian
+  pages:
+    - id: main_page
+      bg_color: 0x000000
+      bg_opa: COVER
+      widgets:
+        - obj:
+            id: bg_panel
+            align: CENTER
+            width: 100%
+            height: 100%
+            radius: 0
+            bg_color: ${color_bg}
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            widgets:
+              # --- Header banner ---
+              - obj:
+                  id: header_bar
+                  align: TOP_MID
+                  width: 100%
+                  height: 120
+                  radius: 0
+                  bg_color: ${color_bg_dark}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  widgets:
+                    - label:
+                        id: lbl_brand
+                        text: "Basil"
+                        x: 36
+                        align: LEFT_MID
+                        text_color: ${color_text}
+                        text_font: montserrat_48
+                    - image:
+                        id: img_leaf
+                        src: basil_leaf
+                        x: 186
+                        align: LEFT_MID
+                    # Top-right slot: Settings while idle, Undo after an
+                    # undoable success - never both (refresh_screen decides).
+                    # 96x96 targets around 56 px icons.
+                    - button:
+                        id: btn_settings
+                        hidden: true
+                        align: RIGHT_MID
+                        x: -20
+                        width: 96
+                        height: 96
+                        radius: 48
+                        bg_opa: TRANSP
+                        border_width: 0
+                        shadow_width: 0
+                        on_click:
+                          then:
+                            - script.execute: sync_settings_widgets
+                            - lvgl.page.show: settings_page
+                            - script.execute: settings_autoclose
+                        widgets:
+                          - label:
+                              text: "\U0000e8b8"
+                              align: CENTER
+                              text_color: ${color_text}
+                              text_font: font_icons
+                    - button:
+                        id: btn_undo
+                        hidden: true
+                        align: RIGHT_MID
+                        x: -20
+                        width: 96
+                        height: 96
+                        radius: 48
+                        bg_opa: TRANSP
+                        border_width: 0
+                        shadow_width: 0
+                        on_click:
+                          then:
+                            - mqtt.publish:
+                                topic: ${undo_topic}
+                                payload: !lambda 'return id(scan_undo_id).state;'
+                            - lambda: |-
+                                lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+                                lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
+                        widgets:
+                          - label:
+                              text: "\U0000e166"
+                              align: CENTER
+                              text_color: ${color_text}
+                              text_font: font_icons
+                    # Cart: 40 px gap to Undo (double its 20 px edge margin),
+                    # same spacing rule as the Indicator.
+                    - button:
+                        id: btn_list
+                        hidden: true
+                        align: RIGHT_MID
+                        x: -156
+                        width: 96
+                        height: 96
+                        radius: 48
+                        bg_opa: TRANSP
+                        border_width: 0
+                        shadow_width: 0
+                        on_click:
+                          then:
+                            - mqtt.publish:
+                                topic: ${list_topic}
+                                payload: !lambda 'return id(scan_list_id).state;'
+                            - lambda: |-
+                                lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
+                                lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+                        widgets:
+                          - label:
+                              text: "\U0000e854"
+                              align: CENTER
+                              text_color: ${color_text}
+                              text_font: font_icons
+
+              # --- Scanner reticle ---
+              # One transparent frame centered in the body; the eight bars are
+              # pinned to its corners, so it stays square to the text in either
+              # orientation. Bars are 100 long, 12 thick.
+              - obj:
+                  id: reticle
+                  hidden: true
+                  align: CENTER
+                  y: 60
+                  width: 600
+                  height: 380
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  widgets:
+                    - obj: {align: TOP_LEFT, width: 100, height: 12, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: TOP_LEFT, width: 12, height: 100, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: TOP_RIGHT, width: 100, height: 12, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: TOP_RIGHT, width: 12, height: 100, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: BOTTOM_LEFT, width: 100, height: 12, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: BOTTOM_LEFT, width: 12, height: 100, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: BOTTOM_RIGHT, width: 100, height: 12, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+                    - obj: {align: BOTTOM_RIGHT, width: 12, height: 100, radius: 0, bg_color: "${color_bracket}", bg_opa: COVER, border_width: 0}
+
+              # --- Text column (flex, re-centered in refresh_screen) ---
+              # Same structure as the Indicator: title / spinner / body / stock
+              # pill stack in a SIZE_CONTENT column so a wrapped body pushes the
+              # column taller instead of drawing over the title. The static
+              # state below is the Starting Up screen.
+              - obj:
+                  id: status_group
+                  align: CENTER
+                  y: 60
+                  width: 90%
+                  height: SIZE_CONTENT
+                  bg_opa: TRANSP
+                  border_width: 0
+                  pad_all: 0
+                  scrollable: false
+                  layout:
+                    type: flex
+                    flex_flow: column
+                    flex_align_main: center
+                    flex_align_cross: center
+                    pad_row: 40
+                  widgets:
+                    - label:
+                        id: lbl_title
+                        text: "Starting Up"
+                        width: 100%
+                        long_mode: WRAP
+                        text_align: CENTER
+                        text_color: ${color_text}
+                        text_font: font_bold_64
+                    - spinner:
+                        id: boot_spinner
+                        width: 96
+                        height: 96
+                        spin_time: 1200ms
+                        arc_length: 60deg
+                        arc_width: 10
+                        arc_color: ${color_bg_dark}
+                        indicator:
+                          arc_width: 10
+                          arc_color: ${color_text}
+                    - label:
+                        id: lbl_body
+                        text: ""
+                        hidden: true
+                        width: 100%
+                        long_mode: WRAP
+                        text_align: CENTER
+                        text_color: ${color_text}
+                        text_font: montserrat_48
+                    - obj:
+                        id: stock_badge
+                        hidden: true
+                        width: SIZE_CONTENT
+                        height: 72
+                        radius: 36
+                        bg_color: ${color_text}
+                        bg_opa: COVER
+                        border_width: 0
+                        pad_top: 0
+                        pad_bottom: 0
+                        pad_left: 32
+                        pad_right: 32
+                        scrollable: false
+                        widgets:
+                          - label:
+                              id: lbl_badge
+                              text: ""
+                              align: CENTER
+                              text_align: CENTER
+                              text_color: ${color_badge_text}
+                              text_font: montserrat_36
+
+              # Countdown bar, flush under the header (y = header height).
+              # Not in the flex column, or the text would reflow every frame.
+              - obj:
+                  id: countdown_bar
+                  hidden: true
+                  align: TOP_LEFT
+                  x: 0
+                  y: 120
+                  width: 100%
+                  height: 10
+                  radius: 0
+                  bg_color: ${color_text}
+                  bg_opa: COVER
+                  border_width: 0
+                  pad_all: 0
+              - label:
+                  id: lbl_footer
+                  text: "connecting..."
+                  align: BOTTOM_MID
+                  y: -32
+                  width: 90%
+                  long_mode: WRAP
+                  text_align: CENTER
+                  text_color: ${color_text_dim}
+                  text_font: montserrat_32
+
+    # --- Settings page --------------------------------------------------------
+    - id: settings_page
+      bg_color: ${color_bg}
+      bg_opa: COVER
+      widgets:
+        - obj:
+            align: TOP_MID
+            width: 100%
+            height: 120
+            radius: 0
+            bg_color: ${color_bg_dark}
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            widgets:
+              - label:
+                  text: "Basil"
+                  x: 36
+                  align: LEFT_MID
+                  text_color: ${color_text}
+                  text_font: montserrat_48
+              - image:
+                  src: basil_leaf
+                  x: 186
+                  align: LEFT_MID
+        # Settings content in a flex column so it centers in either orientation.
+        - obj:
+            align: CENTER
+            width: 80%
+            height: SIZE_CONTENT
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            scrollable: false
+            layout:
+              type: flex
+              flex_flow: column
+              flex_align_main: center
+              flex_align_cross: center
+              pad_row: 28
+            widgets:
+              - label:
+                  text: "Settings"
+                  text_color: ${color_text}
+                  text_font: font_bold_64
+              - label:
+                  text: "Result display timeout"
+                  text_color: ${color_text_dim}
+                  text_font: montserrat_36
+              - label:
+                  id: lbl_setting_value
+                  text: "5 s"
+                  text_color: ${color_text}
+                  text_font: font_bold_48
+              # 2-10 s, same range as the Indicator, the Basil app and the Pi.
+              - slider:
+                  id: settings_slider
+                  width: 100%
+                  height: 40
+                  min_value: 2
+                  max_value: 10
+                  value: 5
+                  indicator:
+                    bg_color: ${color_success}
+                  knob:
+                    bg_color: ${color_text}
+                    pad_all: 16
+                  on_value:
+                    then:
+                      - lvgl.label.update:
+                          id: lbl_setting_value
+                          text:
+                            format: "%.0f s"
+                            args: ['x']
+                      - script.execute: settings_autoclose
+                  on_release:
+                    then:
+                      - lambda: 'id(result_sec_setting) = (int) x;'
+                      - mqtt.publish:
+                          topic: ${result_sec_topic}
+                          payload: !lambda 'return std::to_string(id(result_sec_setting));'
+                          retain: true
+              # Spacer between the two settings.
+              - obj:
+                  width: 10
+                  height: 24
+                  bg_opa: TRANSP
+                  border_width: 0
+              - label:
+                  text: "Screen backlight timeout"
+                  text_color: ${color_text_dim}
+                  text_font: montserrat_36
+              - label:
+                  id: lbl_timeout_value
+                  text: "1 min"
+                  text_color: ${color_text}
+                  text_font: font_bold_48
+              - slider:
+                  id: timeout_slider
+                  width: 100%
+                  height: 40
+                  min_value: 0
+                  max_value: 6
+                  value: 2
+                  indicator:
+                    bg_color: ${color_success}
+                  knob:
+                    bg_color: ${color_text}
+                    pad_all: 16
+                  on_value:
+                    then:
+                      - lvgl.label.update:
+                          id: lbl_timeout_value
+                          text: !lambda |-
+                            static const char* const names[] = {"15 s", "30 s", "1 min", "2 min", "5 min", "10 min", "Never"};
+                            int i = (int) x;
+                            if (i < 0) i = 0;
+                            if (i > 6) i = 6;
+                            return std::string(names[i]);
+                      - script.execute: settings_autoclose
+                  on_release:
+                    then:
+                      - lambda: 'id(screen_timeout_idx) = (int) x;'
+                      - script.execute: screen_sleep
+        - button:
+            align: BOTTOM_MID
+            y: -48
+            width: 320
+            height: 96
+            radius: 48
+            bg_color: ${color_text}
+            bg_opa: COVER
+            border_width: 0
+            shadow_width: 0
+            on_click:
+              then:
+                - lvgl.page.show: main_page
+            widgets:
+              - label:
+                  text: "Done"
+                  align: CENTER
+                  text_color: ${color_badge_text}
+                  text_font: font_bold_48
+
+# --- Scripts ------------------------------------------------------------------
+script:
+  - id: refresh_screen
+    then:
+      - lambda: |-
+          auto show = [](lv_obj_t* o, bool visible) {
+            if (visible) lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+            else         lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+          };
+
+          // Settings (idle) and Undo (undoable success) share the top-right
+          // slot - never both. The cart only appears next to Undo.
+          auto set_header_buttons = [&](bool settings, bool undo, bool list) {
+            show(id(btn_settings), settings);
+            show(id(btn_undo), undo);
+            show(id(btn_list), list);
+          };
+
+          auto stop_countdown = []() {
+            lv_anim_del(id(countdown_bar), nullptr);
+            lv_obj_add_flag(id(countdown_bar), LV_OBJ_FLAG_HIDDEN);
+          };
+
+          // Drains from the panel's current width, so it is right in either
+          // orientation.
+          auto start_countdown = [](uint32_t ms) {
+            lv_anim_del(id(countdown_bar), nullptr);
+            lv_obj_update_layout(id(bg_panel));
+            int32_t full = lv_obj_get_width(id(bg_panel));
+            lv_obj_set_width(id(countdown_bar), full);
+            lv_obj_clear_flag(id(countdown_bar), LV_OBJ_FLAG_HIDDEN);
+            lv_anim_t a;
+            lv_anim_init(&a);
+            lv_anim_set_var(&a, id(countdown_bar));
+            lv_anim_set_exec_cb(&a, [](void* obj, int32_t v) {
+              lv_obj_set_width((lv_obj_t*) obj, v);
+            });
+            lv_anim_set_values(&a, full, 0);
+            lv_anim_set_time(&a, ms);
+            lv_anim_start(&a);
+          };
+
+          // Only the column and footer are re-aligned; flex owns the labels.
+          auto realign = []() {
+            lv_obj_update_layout(id(status_group));
+            lv_obj_align(id(status_group), LV_ALIGN_CENTER,     0,  60);
+            lv_obj_align(id(lbl_footer),   LV_ALIGN_BOTTOM_MID, 0, -32);
+          };
+
+          // Shared by Starting Up and both offline screens.
+          auto simple_screen = [&](uint32_t bg, const char* title,
+                                   const char* body, const char* footer) {
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(bg), 0);
+            show(id(reticle), false);
+            set_header_buttons(false, false, false);
+            lv_label_set_text(id(lbl_title), title);
+            lv_label_set_text(id(lbl_body), body);
+            show(id(lbl_body), body[0] != '\0');
+            show(id(stock_badge), false);
+            lv_label_set_text(id(lbl_footer), footer);
+            stop_countdown();
+            realign();
+          };
+
+          show(id(boot_spinner), id(starting_up));
+
+          if (id(starting_up)) {
+            ESP_LOGI("basil", "render: starting up");
+            simple_screen(${color_bg}, "Starting Up", "", "waiting for scanner...");
+            return;
+          }
+          if (!id(broker_up)) {
+            ESP_LOGI("basil", "render: OFFLINE (MQTT broker unreachable)");
+            simple_screen(${color_bg_dark}, "Basil Capture", "offline", "can't reach server...");
+            return;
+          }
+          if (!id(pi_online)) {
+            ESP_LOGI("basil", "render: OFFLINE (Pi unavailable)");
+            simple_screen(${color_bg_dark}, "Basil Capture", "offline", "waiting for scanner...");
+            return;
+          }
+
+          std::string s     = id(scan_status).state;
+          std::string title = id(scan_title).state;
+          std::string body  = id(scan_body).state;
+          std::string badge = id(scan_badge).state;
+
+          if (s == "idle" || s.empty()) {
+            ESP_LOGI("basil", "render: idle (Ready to Scan)");
+            lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(${color_bg}), 0);
+            show(id(reticle), true);
+            set_header_buttons(true, false, false);
+            lv_label_set_text(id(lbl_title), "Ready to Scan");
+            lv_label_set_text(id(lbl_body), "");
+            show(id(lbl_body), false);
+            lv_label_set_text(id(lbl_badge), "");
+            show(id(stock_badge), false);
+            lv_label_set_text(id(lbl_footer), "");
+            stop_countdown();
+            realign();
+            return;
+          }
+
+          uint32_t color = ${color_bg};
+          if      (s == "success")  color = ${color_success};
+          else if (s == "error")    color = ${color_error};
+          else if (s == "scanning") color = ${color_scanning};
+
+          ESP_LOGI("basil", "render: %s | title='%s' badge='%s'",
+                   s.c_str(), title.c_str(), badge.c_str());
+          lv_obj_set_style_bg_color(id(bg_panel), lv_color_hex(color), 0);
+          show(id(reticle), false);
+          set_header_buttons(false,
+                             s == "success" && !id(scan_undo_id).state.empty(),
+                             s == "success" && !id(scan_list_id).state.empty());
+          lv_label_set_text(id(lbl_title), title.c_str());
+          lv_label_set_text(id(lbl_body), body.c_str());
+          show(id(lbl_body), !body.empty());
+          lv_label_set_text(id(lbl_badge), badge.c_str());
+          show(id(stock_badge), !badge.empty());
+          lv_label_set_text(id(lbl_footer), "");
+
+          if (id(result_ms) > 0) start_countdown((uint32_t) id(result_ms));
+          else                   stop_countdown();
+          realign();
+
+  # Push the stored settings into the Settings page widgets.
+  - id: sync_settings_widgets
+    then:
+      - lvgl.slider.update:
+          id: settings_slider
+          value: !lambda 'return id(result_sec_setting);'
+      - lvgl.label.update:
+          id: lbl_setting_value
+          text:
+            format: "%d s"
+            args: ['id(result_sec_setting)']
+      - lvgl.slider.update:
+          id: timeout_slider
+          value: !lambda 'return id(screen_timeout_idx);'
+      - lvgl.label.update:
+          id: lbl_timeout_value
+          text: !lambda |-
+            static const char* const names[] = {"15 s", "30 s", "1 min", "2 min", "5 min", "10 min", "Never"};
+            int i = id(screen_timeout_idx);
+            if (i < 0) i = 0;
+            if (i > 6) i = 6;
+            return std::string(names[i]);
+
+  # Backlight sleep; every wake source restarts it. Never (index 6) skips it.
+  - id: screen_sleep
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(screen_timeout_idx) < 6;'
+          then:
+            - delay: !lambda |-
+                static const uint32_t secs[] = {15, 30, 60, 120, 300, 600};
+                int i = id(screen_timeout_idx);
+                if (i < 0) i = 0;
+                if (i > 5) i = 5;
+                return secs[i] * 1000;
+            - if:
+                condition:
+                  lambda: |-
+                    std::string s = id(scan_status).state;
+                    bool active = id(pi_online) && id(broker_up) &&
+                        (s == "scanning" || s == "success" || s == "error");
+                    return !active && !id(starting_up);
+                then:
+                  - light.turn_off: backlight
+
+  - id: undo_expire
+    mode: restart
+    then:
+      - delay: !lambda 'return id(result_ms);'
+      - lambda: |-
+          lv_obj_add_flag(id(btn_undo), LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(id(btn_list), LV_OBJ_FLAG_HIDDEN);
+
+  - id: startup_timeout
+    then:
+      - delay: ${startup_grace}
+      - if:
+          condition:
+            lambda: 'return id(starting_up);'
+          then:
+            - lambda: |-
+                ESP_LOGW("basil", "Pi did not come online within ${startup_grace}");
+                id(starting_up) = false;
+            - script.execute: refresh_screen
+            - light.turn_on: backlight
+            - script.execute: screen_sleep
+
+  - id: settings_autoclose
+    mode: restart
+    then:
+      - delay: 30s
+      - lvgl.page.show: main_page

@@ -59,6 +59,12 @@ mqtt:
   client_id: "basil-capture-pi"
   status_topic: "basil/capture/status"
   availability_topic: "basil/capture/availability"
+  # Birth/LWT topics of the displays. The Pi re-sends "ready" when any of them
+  # connects. These are the defaults; list only the displays you have if you
+  # like, or leave this out.
+  # display_availability_topics:
+  #   - "basil/capture/indicator/availability"   # SenseCAP Indicator D1
+  #   - "basil/capture/reterminal/availability"  # reTerminal D1001
 
 behavior:
   # HTTP timeout for a single Grocy request. Note that one scan makes TWO

@@ -21,7 +21,7 @@ Messages are retained so the Indicator shows the current state immediately on
 (re)connect, and a Last-Will (LWT) marks the Pi offline if the service dies.
 
 The one exception is `ready_topic`: a NOT-retained "ready", sent once the
-scanner is open (and again whenever the Indicator connects). A retained
+scanner is open (and again whenever a display connects). A retained
 "online" can be stale after a power cut, so the Indicator waits for this live
 message before leaving its Starting Up screen.
 
@@ -68,10 +68,19 @@ class Display:
         # availability topic can't prove that - after a power cut it still
         # says "online" until the broker's keepalive check expires.
         self.ready_topic = cfg.get("ready_topic", "basil/capture/ready")
-        # The Indicator's birth/LWT topic. When it (re)connects we answer with
-        # a fresh ready so a freshly booted Indicator doesn't have to wait.
-        self.indicator_avail = cfg.get("indicator_availability_topic",
-                                       "basil/capture/indicator/availability")
+        # Every display's birth/LWT topic. When any of them (re)connects we
+        # answer with a fresh ready so a freshly booted display doesn't have to
+        # wait. `display_availability_topics` lists them; without it, the old
+        # single `indicator_availability_topic` key (or its default) plus the
+        # reTerminal's default topic are used, so existing configs keep working.
+        topics = cfg.get("display_availability_topics")
+        if not topics:
+            topics = [
+                cfg.get("indicator_availability_topic",
+                        "basil/capture/indicator/availability"),
+                "basil/capture/reterminal/availability",
+            ]
+        self.display_avail = list(dict.fromkeys(topics))
         # Set by mark_ready() once the scanner is open. Until then the Pi does
         # not announce itself "online" at all.
         self._ready = False
@@ -155,8 +164,8 @@ class Display:
         """
         if rc == 0:
             client.subscribe([(self.undo_topic, 1), (self.list_topic, 1),
-                              (self.setting_topic, 1),
-                              (self.indicator_avail, 1)])
+                              (self.setting_topic, 1)] +
+                             [(t, 1) for t in self.display_avail])
             if self._ready:
                 self._announce_ready()
 
@@ -175,10 +184,10 @@ class Display:
 
     def _on_message(self, client, userdata, msg):
         payload = msg.payload.decode("utf-8", errors="replace").strip()
-        if msg.topic == self.indicator_avail:
-            # The Indicator just (re)booted or reconnected and is waiting on
-            # its Starting Up screen. The retained copy of its last birth
-            # message arrives here too; answering it is harmless.
+        if msg.topic in self.display_avail:
+            # A display just (re)booted or reconnected and is waiting on its
+            # Starting Up screen. The retained copy of its last birth message
+            # arrives here too; answering it is harmless.
             if payload == "online" and self._ready:
                 self.client.publish(self.ready_topic, "ready", qos=1,
                                     retain=False)
